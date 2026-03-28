@@ -17,6 +17,53 @@ from .deck_tree import DeckTree
 from .decks import get_top_level_decks, find_deck_node
 
 
+# ── Qt stylesheet for native widgets (palette-aware for light/dark) ──
+_QSS = """\
+QComboBox {
+    padding: 5px 10px;
+    border: 1px solid palette(mid);
+    border-radius: 4px;
+    background: palette(base);
+    min-height: 22px;
+}
+QComboBox:hover {
+    border-color: palette(dark);
+}
+QComboBox::drop-down {
+    border: none;
+    padding-right: 6px;
+}
+QComboBox QAbstractItemView {
+    background: palette(base);
+    selection-background-color: palette(highlight);
+    selection-color: palette(highlighted-text);
+    border: 1px solid palette(mid);
+    padding: 2px;
+}
+QSplitter::handle {
+    background: palette(mid);
+}
+QToolBar {
+    border-bottom: 1px solid palette(mid);
+    spacing: 4px;
+    padding: 2px 6px;
+}
+QToolButton {
+    padding: 4px 10px;
+    border-radius: 4px;
+    border: 1px solid transparent;
+    font-size: 13px;
+}
+QToolButton:hover {
+    background: palette(midlight);
+    border-color: palette(mid);
+}
+QToolButton:checked {
+    background: palette(highlight);
+    color: palette(highlighted-text);
+}
+"""
+
 # ── SVG icons for the toolbar toggle ──
 _ICON_VIEW = (
     '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" '
@@ -41,13 +88,14 @@ class CardViewerWindow(QMainWindow):
         super().__init__(parent, Qt.WindowType.Window)
         self.setWindowTitle("Card Viewer")
         self.resize(1100, 750)
+        self.setStyleSheet(_QSS)
 
         # ── Left panel: dropdown + deck tree ──
         left_panel = QWidget()
         left_panel.setMinimumWidth(180)
         left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(0)
+        left_layout.setContentsMargins(6, 6, 6, 0)
+        left_layout.setSpacing(4)
 
         self._combo = QComboBox()
         self._combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)

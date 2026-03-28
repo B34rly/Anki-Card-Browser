@@ -30,6 +30,24 @@ class DeckTree(QWidget):
 
         self._tree = QTreeWidget()
         self._tree.setHeaderHidden(True)
+        self._tree.setStyleSheet("""
+            QTreeWidget {
+                border: none;
+                background: palette(base);
+                font-size: 13px;
+                outline: none;
+            }
+            QTreeWidget::item {
+                padding: 4px 2px;
+            }
+            QTreeWidget::item:hover {
+                background: palette(midlight);
+            }
+            QTreeWidget::item:selected {
+                background: palette(highlight);
+                color: palette(highlighted-text);
+            }
+        """)
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._on_context_menu)
         self._tree.itemClicked.connect(self._on_item_clicked)

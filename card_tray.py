@@ -25,159 +25,182 @@ _TRAY_CSS = """\
 body {
     margin: 0; padding: 0;
     background: Canvas; color: CanvasText;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.45;
 }
+
+/* ── Card frames ── */
 .card-frame {
     position: relative;
-    border: 1px solid color-mix(in srgb, CanvasText 20%, Canvas);
-    border-radius: 6px;
-    padding: 16px;
-    padding-top: 32px;
+    border: 1px solid color-mix(in srgb, CanvasText 14%, Canvas);
+    border-radius: 8px;
+    padding: 14px;
+    padding-top: 34px;
     margin-bottom: 12px;
     break-inside: avoid;
     cursor: pointer;
+    overflow: hidden;
     transition: box-shadow 0.15s ease, transform 0.15s ease, opacity 0.15s ease;
 }
 .card-frame img { max-width: 100%; height: auto; display: block; }
 .card-frame:hover {
-    box-shadow: 0 4px 16px rgba(0,0,0,0.18);
-    transform: translateY(-2px);
+    box-shadow: 0 2px 12px rgba(0,0,0,0.12);
+    transform: translateY(-1px);
 }
 .card-frame.suspended { opacity: 0.45; }
 
 /* ── IO grouped card ── */
 .io-container { position: relative; display: block; width: 100%; overflow: hidden; line-height: 0; }
 .io-container img { display: block; width: 100%; height: auto; }
-.io-overlay {
-    position: absolute; inset: 0; pointer-events: none;
-}
+.io-overlay { position: absolute; inset: 0; pointer-events: none; }
 .io-badge {
     display: inline-block; font-size: 11px; color: GrayText;
-    background: color-mix(in srgb, CanvasText 10%, Canvas); border-radius: 4px; padding: 1px 6px;
-    margin-top: 6px;
+    background: color-mix(in srgb, CanvasText 8%, Canvas); border-radius: 4px; padding: 2px 8px;
+    margin-top: 8px;
 }
 
 /* ── 3-dot menu ── */
 .card-menu-btn {
     position: absolute; top: 6px; right: 8px;
     background: none; border: none; cursor: pointer;
-    font-size: 18px; color: #888; padding: 2px 6px;
+    font-size: 18px; color: GrayText; padding: 2px 6px;
     border-radius: 4px; line-height: 1;
+    opacity: 0;
+    transition: opacity 0.15s ease, background 0.15s ease, color 0.1s ease;
 }
-.card-menu-btn:hover { background: color-mix(in srgb, CanvasText 10%, Canvas); }
+.card-frame:hover .card-menu-btn { opacity: 1; }
+.card-menu-btn:hover { background: color-mix(in srgb, CanvasText 10%, Canvas); color: CanvasText; }
+
+/* ── Card dropdown menu ── */
 .card-menu {
-    display: none; position: absolute; top: 28px; right: 8px;
+    display: none; position: absolute; top: 30px; right: 8px;
     background: Canvas; color: CanvasText;
-    border: 1px solid color-mix(in srgb, CanvasText 25%, Canvas); border-radius: 6px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.25); z-index: 100;
-    min-width: 150px; overflow: hidden;
+    border: 1px solid color-mix(in srgb, CanvasText 18%, Canvas); border-radius: 6px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.18); z-index: 100;
+    min-width: 160px; overflow: hidden;
+    padding: 4px 0;
 }
 .card-menu.open { display: block; }
 .card-menu button {
-    display: block; width: 100%; padding: 8px 14px;
+    display: block; width: 100%; padding: 7px 14px;
     border: none; background: none; text-align: left;
     cursor: pointer; font-size: 13px; color: CanvasText;
+    transition: background 0.1s ease;
 }
-.card-menu button:hover { background: color-mix(in srgb, CanvasText 10%, Canvas); }
+.card-menu button:hover { background: color-mix(in srgb, CanvasText 8%, Canvas); }
 
 /* ── Overlay for expanded card ── */
 #overlay {
     display: none; position: fixed; inset: 0;
-    background: rgba(0,0,0,0.5); z-index: 200;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+    z-index: 200;
     justify-content: center; align-items: center;
 }
 #overlay.open { display: flex; }
 #overlay-card {
-    background: Canvas; color: CanvasText; border-radius: 10px;
-    padding: 24px; max-width: 85vw; max-height: 85vh;
+    background: Canvas; color: CanvasText; border-radius: 12px;
+    padding: 28px; max-width: 85vw; max-height: 85vh;
     overflow: auto; position: relative;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.3);
 }
 #overlay-card img { max-width: 100%; height: auto; }
 #overlay-close {
-    position: absolute; top: 8px; right: 12px;
+    position: absolute; top: 10px; right: 14px;
     font-size: 22px; cursor: pointer; background: none;
     border: none; color: GrayText;
+    transition: color 0.1s ease;
 }
 #overlay-close:hover { color: CanvasText; }
 
 /* ── Deck sections ── */
 .deck-header {
     display: flex; align-items: center; gap: 8px;
-    padding: 10px 12px;
-    background: color-mix(in srgb, CanvasText 5%, Canvas);
-    border-bottom: 1px solid color-mix(in srgb, CanvasText 12%, Canvas);
+    padding: 8px 12px;
+    background: color-mix(in srgb, CanvasText 4%, Canvas);
+    border-bottom: 1px solid color-mix(in srgb, CanvasText 10%, Canvas);
     cursor: pointer; user-select: none;
+    transition: background 0.15s ease;
 }
 .deck-header:hover {
-    background: color-mix(in srgb, CanvasText 10%, Canvas);
+    background: color-mix(in srgb, CanvasText 8%, Canvas);
 }
 .deck-header.highlight {
-    background: color-mix(in srgb, Highlight 25%, Canvas);
+    background: color-mix(in srgb, Highlight 20%, Canvas);
     transition: background 0.5s;
 }
-.depth-0 { padding-left: 12px; font-weight: bold; font-size: 15px; }
-.depth-1 { padding-left: 28px; font-weight: 600; font-size: 14px; }
+.depth-0 { padding-left: 12px; font-weight: 600; font-size: 14px; }
+.depth-1 { padding-left: 28px; font-weight: 600; font-size: 13px; }
 .depth-2 { padding-left: 44px; font-size: 13px; }
 .depth-3 { padding-left: 60px; font-size: 13px; }
 .depth-4 { padding-left: 76px; font-size: 12px; }
 .collapse-arrow {
-    display: inline-block; font-size: 11px;
+    display: inline-block; font-size: 10px;
     transition: transform 0.2s ease;
+    color: GrayText;
 }
 .collapse-arrow.collapsed { transform: rotate(-90deg); }
 .deck-name { flex: 1; min-width: 0; }
 .deck-path { color: GrayText; font-size: 0.85em; }
-.deck-leaf { font-weight: bold; }
-.deck-info { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.deck-leaf { font-weight: 600; }
+.deck-info { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .card-count {
     color: GrayText; font-size: 12px; white-space: nowrap;
 }
 .deck-btn {
-    padding: 2px 8px; border: 1px solid color-mix(in srgb, CanvasText 20%, Canvas);
+    padding: 3px 10px; border: 1px solid color-mix(in srgb, CanvasText 15%, Canvas);
     border-radius: 4px; background: Canvas; color: CanvasText;
     font-size: 11px; cursor: pointer; white-space: nowrap;
+    transition: background 0.1s ease, border-color 0.1s ease;
 }
-.deck-btn:hover { background: color-mix(in srgb, CanvasText 10%, Canvas); }
+.deck-btn:hover {
+    background: color-mix(in srgb, CanvasText 8%, Canvas);
+    border-color: color-mix(in srgb, CanvasText 25%, Canvas);
+}
 .deck-body.collapsed { display: none; }
 .deck-cards {
-    column-width: 320px; column-gap: 12px;
-    padding: 12px;
+    column-width: 320px; column-gap: 14px;
+    padding: 14px;
 }
 .deck-cards:empty { display: none; }
 
 /* ── Add-card button ── */
 .add-card-btn {
-    border: 2px dashed color-mix(in srgb, CanvasText 20%, Canvas);
-    border-radius: 6px;
-    padding: 32px 16px;
+    border: 2px dashed color-mix(in srgb, CanvasText 15%, Canvas);
+    border-radius: 8px;
+    padding: 24px 16px;
     margin-bottom: 12px;
     break-inside: avoid;
     cursor: pointer;
     display: flex; align-items: center; justify-content: center;
-    font-size: 36px; color: color-mix(in srgb, CanvasText 30%, Canvas);
+    font-size: 28px; color: color-mix(in srgb, CanvasText 25%, Canvas);
     transition: border-color 0.15s, color 0.15s, background 0.15s;
     user-select: none;
 }
 .add-card-btn:hover {
-    border-color: color-mix(in srgb, CanvasText 50%, Canvas);
-    color: color-mix(in srgb, CanvasText 60%, Canvas);
-    background: color-mix(in srgb, CanvasText 4%, Canvas);
+    border-color: color-mix(in srgb, CanvasText 40%, Canvas);
+    color: color-mix(in srgb, CanvasText 50%, Canvas);
+    background: color-mix(in srgb, CanvasText 3%, Canvas);
 }
 
 /* ── Deck header context menu ── */
 .deck-ctx-menu {
     display: none; position: fixed;
     background: Canvas; color: CanvasText;
-    border: 1px solid color-mix(in srgb, CanvasText 25%, Canvas); border-radius: 6px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.25); z-index: 300;
-    min-width: 160px; overflow: hidden;
+    border: 1px solid color-mix(in srgb, CanvasText 18%, Canvas); border-radius: 6px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.18); z-index: 300;
+    min-width: 170px; overflow: hidden;
+    padding: 4px 0;
 }
 .deck-ctx-menu.open { display: block; }
 .deck-ctx-menu button {
-    display: block; width: 100%; padding: 8px 14px;
+    display: block; width: 100%; padding: 7px 14px;
     border: none; background: none; text-align: left;
     cursor: pointer; font-size: 13px; color: CanvasText;
+    transition: background 0.1s ease;
 }
-.deck-ctx-menu button:hover { background: color-mix(in srgb, CanvasText 10%, Canvas); }
+.deck-ctx-menu button:hover { background: color-mix(in srgb, CanvasText 8%, Canvas); }
 
 /* ── View mode: hide edit affordances ── */
 body.view-mode .add-card-btn,
@@ -186,6 +209,19 @@ body.view-mode .deck-btn {
     display: none;
 }
 body.view-mode .deck-header { cursor: pointer; }
+
+/* ── Dark mode refinements ── */
+@media (prefers-color-scheme: dark) {
+    .card-frame:hover {
+        box-shadow: 0 2px 16px rgba(0,0,0,0.35);
+    }
+    .card-menu, .deck-ctx-menu {
+        box-shadow: 0 6px 24px rgba(0,0,0,0.4);
+    }
+    #overlay-card {
+        box-shadow: 0 8px 48px rgba(0,0,0,0.5);
+    }
+}
 """
 
 _TRAY_JS = """\
@@ -433,7 +469,7 @@ class CardTray(QWidget):
 
         self._header = QLabel(title)
         self._header.setStyleSheet(
-            "font-size: 16px; font-weight: bold; padding: 8px 4px;"
+            "font-size: 14px; font-weight: 600; padding: 8px 12px;"
         )
         layout.addWidget(self._header, 0)
 
