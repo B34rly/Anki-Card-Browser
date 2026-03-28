@@ -122,6 +122,7 @@ body {
     border-bottom: 1px solid color-mix(in srgb, CanvasText 10%, Canvas);
     cursor: pointer; user-select: none;
     transition: background 0.15s ease;
+    position: sticky; top: 0; z-index: 50;
 }
 .deck-header:hover {
     background: color-mix(in srgb, CanvasText 8%, Canvas);

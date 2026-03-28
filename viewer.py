@@ -4,10 +4,14 @@ from aqt import mw
 from aqt.qt import (
     QMainWindow,
     QWidget,
+    QHBoxLayout,
     QVBoxLayout,
     QComboBox,
+    QLineEdit,
     QSplitter,
-    QToolBar,
+    QToolButton,
+    QIcon,
+    QPixmap,
     QTimer,
     Qt,
 )
@@ -43,16 +47,21 @@ QComboBox QAbstractItemView {
 QSplitter::handle {
     background: palette(mid);
 }
-QToolBar {
-    border-bottom: 1px solid palette(mid);
-    spacing: 4px;
-    padding: 2px 6px;
+QLineEdit {
+    padding: 5px 8px;
+    border: 1px solid palette(mid);
+    border-radius: 4px;
+    background: palette(base);
+    min-height: 22px;
+    font-size: 13px;
+}
+QLineEdit:focus {
+    border-color: palette(highlight);
 }
 QToolButton {
-    padding: 4px 10px;
+    padding: 4px;
     border-radius: 4px;
     border: 1px solid transparent;
-    font-size: 13px;
 }
 QToolButton:hover {
     background: palette(midlight);
@@ -64,16 +73,16 @@ QToolButton:checked {
 }
 """
 
-# ── SVG icons for the toolbar toggle ──
-_ICON_VIEW = (
+# ── SVG icon templates for the toolbar toggle (use {color} placeholder) ──
+_SVG_VIEW = (
     '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" '
-    'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    'fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
     '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>'
     '<circle cx="12" cy="12" r="3"/></svg>'
 )
-_ICON_EDIT = (
+_SVG_EDIT = (
     '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" '
-    'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    'fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
     '<path d="M12 20h9"/>'
     '<path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>'
 )
@@ -102,6 +111,24 @@ class CardViewerWindow(QMainWindow):
         self._combo.currentIndexChanged.connect(self._on_deck_changed)
         left_layout.addWidget(self._combo, 0)
 
+        # Search bar + view/edit toggle on one row
+        self._edit_mode = False
+        search_row = QHBoxLayout()
+        search_row.setContentsMargins(0, 0, 0, 0)
+        search_row.setSpacing(4)
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("Search subdecks\u2026")
+        self._search.setClearButtonEnabled(True)
+        self._search.textChanged.connect(self._on_search_changed)
+        search_row.addWidget(self._search, 1)
+        self._mode_btn = QToolButton()
+        self._mode_btn.setCheckable(True)
+        self._mode_btn.setToolTip("Toggle between View and Edit mode")
+        self._mode_btn.toggled.connect(self._on_mode_toggled)
+        self._update_mode_icon()
+        search_row.addWidget(self._mode_btn, 0)
+        left_layout.addLayout(search_row)
+
         self._deck_tree = DeckTree()
         self._deck_tree.deck_selected.connect(self._on_tree_deck_selected)
         self._deck_tree.subdeck_created.connect(self._refresh_current_deck)
@@ -127,18 +154,6 @@ class CardViewerWindow(QMainWindow):
         self._splitter.setStretchFactor(1, 1)
 
         self.setCentralWidget(self._splitter)
-
-        # ── Toolbar: view/edit toggle ──
-        self._edit_mode = False
-        toolbar = QToolBar("Mode")
-        toolbar.setMovable(False)
-        toolbar.setIconSize(toolbar.iconSize())  # keep default size
-        self._mode_action = toolbar.addAction("View mode")
-        self._mode_action.setCheckable(True)
-        self._mode_action.setToolTip("Toggle between View and Edit mode")
-        self._mode_action.toggled.connect(self._on_mode_toggled)
-        self._update_mode_icon()
-        self.addToolBar(toolbar)
 
         # Populate after the event loop starts
         QTimer.singleShot(0, self._populate_combo)
@@ -188,6 +203,9 @@ class CardViewerWindow(QMainWindow):
 
     # ── View / Edit mode toggle ──
 
+    def _on_search_changed(self, text: str) -> None:
+        self._deck_tree.filter(text)
+
     def _on_mode_toggled(self, checked: bool) -> None:
         self._edit_mode = checked
         self.tray.edit_mode = checked
@@ -195,12 +213,13 @@ class CardViewerWindow(QMainWindow):
         self._update_mode_icon()
 
     def _update_mode_icon(self) -> None:
-        from aqt.qt import QIcon, QPixmap
-        svg = _ICON_EDIT if self._edit_mode else _ICON_VIEW
+        color = self.palette().windowText().color().name()
+        template = _SVG_EDIT if self._edit_mode else _SVG_VIEW
+        svg = template.format(color=color)
         pm = QPixmap()
         pm.loadFromData(svg.encode("utf-8"))
-        self._mode_action.setIcon(QIcon(pm))
-        self._mode_action.setText("Edit mode" if self._edit_mode else "View mode")
+        self._mode_btn.setIcon(QIcon(pm))
+        self._mode_btn.setToolTip("Edit mode" if self._edit_mode else "View mode")
 
     def closeEvent(self, a0):
         CardViewerWindow._instance = None

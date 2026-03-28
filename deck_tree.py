@@ -140,3 +140,42 @@ class DeckTree(QWidget):
             if found is not None:
                 return found
         return None
+
+    def filter(self, text: str) -> None:
+        """Show only tree items whose name (or descendants) match *text*."""
+        root = self._tree.invisibleRootItem()
+        if root is None:
+            return
+        needle = text.strip().lower()
+        if not needle:
+            self._set_all_visible(root, True)
+            self._tree.expandAll()
+            return
+        self._filter_item(root, needle)
+
+    def _filter_item(self, item: QTreeWidgetItem, needle: str) -> bool:
+        """Recursively filter. Returns True if this item or any child matches."""
+        match = False
+        for i in range(item.childCount()):
+            child = item.child(i)
+            if child is None:
+                continue
+            child_match = self._filter_item(child, needle)
+            name = (child.text(0) or "").lower()
+            full = (child.data(0, Qt.ItemDataRole.UserRole + 1) or "").lower()
+            if needle in name or needle in full:
+                child_match = True
+            child.setHidden(not child_match)
+            if child_match:
+                child.setExpanded(True)
+                match = True
+        return match
+
+    @staticmethod
+    def _set_all_visible(item: QTreeWidgetItem, visible: bool) -> None:
+        for i in range(item.childCount()):
+            child = item.child(i)
+            if child is None:
+                continue
+            child.setHidden(not visible)
+            DeckTree._set_all_visible(child, visible)
