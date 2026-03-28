@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from anki.decks import DeckId
 from aqt import mw
 from aqt.qt import (
     QMainWindow,
     QWidget,
     QVBoxLayout,
-    QHBoxLayout,
     QComboBox,
     QSplitter,
     QTimer,
@@ -28,33 +26,37 @@ class CardViewerWindow(QMainWindow):
         self.setWindowTitle("Card Viewer")
         self.resize(1100, 750)
 
-        central = QWidget(self)
-        self.setCentralWidget(central)
-        root_layout = QVBoxLayout(central)
+        # ── Left panel: dropdown + deck tree ──
+        left_panel = QWidget()
+        left_panel.setMinimumWidth(180)
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(0)
 
-        # ── Top bar: deck selector dropdown ──
-        top_bar = QHBoxLayout()
         self._combo = QComboBox()
-        self._combo.setMinimumWidth(250)
+        self._combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         self._combo.currentIndexChanged.connect(self._on_deck_changed)
-        top_bar.addWidget(self._combo)
-        top_bar.addStretch()
-        root_layout.addLayout(top_bar)
-
-        # ── Body: sidebar tree | card tray ──
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        root_layout.addWidget(splitter)
+        left_layout.addWidget(self._combo, 0)
 
         self._deck_tree = DeckTree()
-        self._deck_tree.setMinimumWidth(180)
-        self._deck_tree.setMaximumWidth(350)
         self._deck_tree.deck_selected.connect(self._on_tree_deck_selected)
-        splitter.addWidget(self._deck_tree)
+        left_layout.addWidget(self._deck_tree, 1)
 
-        self.tray = CardTray(parent=splitter)
-        splitter.addWidget(self.tray)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
+        # ── Splitter: left panel | card tray ──
+        self._splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter.setHandleWidth(5)
+        self._splitter.setChildrenCollapsible(False)
+
+        self._splitter.addWidget(left_panel)
+
+        self.tray = CardTray()
+        self._splitter.addWidget(self.tray)
+
+        self._splitter.setSizes([260, 840])
+        self._splitter.setStretchFactor(0, 0)
+        self._splitter.setStretchFactor(1, 1)
+
+        self.setCentralWidget(self._splitter)
 
         # Populate after the event loop starts
         QTimer.singleShot(0, self._populate_combo)
@@ -84,24 +86,13 @@ class CardViewerWindow(QMainWindow):
         # Rebuild the sidebar tree
         self._deck_tree.populate(node, deck_name)
 
-        # Show this deck's own cards in the tray
-        self._show_deck(int(deck_id), deck_name)
+        # Render all subdecks in a continuous scroll
+        self.tray.set_deck_tree(node, deck_name)
 
     # ── Sidebar tree ──
 
     def _on_tree_deck_selected(self, deck_id: int, full_name: str) -> None:
-        self._show_deck(deck_id, full_name)
-
-    # ── Loading cards ──
-
-    def _show_deck(self, deck_id: int, deck_name: str) -> None:
-        col = mw.col
-        if col is None:
-            self.tray.title = "No collection loaded"
-            return
-        card_ids = col.decks.cids(DeckId(deck_id), children=True)
-        self.tray.title = f"{deck_name}  ({len(card_ids)} cards)"
-        self.tray.set_cards(card_ids)
+        self.tray.scroll_to_deck(deck_id)
 
     def closeEvent(self, a0):
         CardViewerWindow._instance = None
