@@ -7,6 +7,7 @@ from aqt.qt import (
     QVBoxLayout,
     QComboBox,
     QSplitter,
+    QToolBar,
     QTimer,
     Qt,
 )
@@ -14,6 +15,21 @@ from aqt.qt import (
 from .card_tray import CardTray
 from .deck_tree import DeckTree
 from .decks import get_top_level_decks, find_deck_node
+
+
+# ── SVG icons for the toolbar toggle ──
+_ICON_VIEW = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" '
+    'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>'
+    '<circle cx="12" cy="12" r="3"/></svg>'
+)
+_ICON_EDIT = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" '
+    'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="M12 20h9"/>'
+    '<path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>'
+)
 
 
 class CardViewerWindow(QMainWindow):
@@ -40,6 +56,7 @@ class CardViewerWindow(QMainWindow):
 
         self._deck_tree = DeckTree()
         self._deck_tree.deck_selected.connect(self._on_tree_deck_selected)
+        self._deck_tree.subdeck_created.connect(self._refresh_current_deck)
         left_layout.addWidget(self._deck_tree, 1)
 
         # Will be connected after tray is created
@@ -54,6 +71,7 @@ class CardViewerWindow(QMainWindow):
 
         self.tray = CardTray()
         self.tray.visible_section_changed.connect(self._on_visible_section)
+        self.tray.subdeck_created.connect(self._refresh_current_deck)
         self._splitter.addWidget(self.tray)
 
         self._splitter.setSizes([260, 840])
@@ -61,6 +79,18 @@ class CardViewerWindow(QMainWindow):
         self._splitter.setStretchFactor(1, 1)
 
         self.setCentralWidget(self._splitter)
+
+        # ── Toolbar: view/edit toggle ──
+        self._edit_mode = False
+        toolbar = QToolBar("Mode")
+        toolbar.setMovable(False)
+        toolbar.setIconSize(toolbar.iconSize())  # keep default size
+        self._mode_action = toolbar.addAction("View mode")
+        self._mode_action.setCheckable(True)
+        self._mode_action.setToolTip("Toggle between View and Edit mode")
+        self._mode_action.toggled.connect(self._on_mode_toggled)
+        self._update_mode_icon()
+        self.addToolBar(toolbar)
 
         # Populate after the event loop starts
         QTimer.singleShot(0, self._populate_combo)
@@ -100,6 +130,29 @@ class CardViewerWindow(QMainWindow):
 
     def _on_visible_section(self, deck_id: int) -> None:
         self._deck_tree.highlight_deck(deck_id)
+
+    def _refresh_current_deck(self) -> None:
+        """Re-render both the sidebar tree and the card tray for the current deck."""
+        index = self._combo.currentIndex()
+        if index < 0:
+            return
+        self._on_deck_changed(index)
+
+    # ── View / Edit mode toggle ──
+
+    def _on_mode_toggled(self, checked: bool) -> None:
+        self._edit_mode = checked
+        self.tray.edit_mode = checked
+        self._deck_tree.edit_mode = checked
+        self._update_mode_icon()
+
+    def _update_mode_icon(self) -> None:
+        from aqt.qt import QIcon, QPixmap
+        svg = _ICON_EDIT if self._edit_mode else _ICON_VIEW
+        pm = QPixmap()
+        pm.loadFromData(svg.encode("utf-8"))
+        self._mode_action.setIcon(QIcon(pm))
+        self._mode_action.setText("Edit mode" if self._edit_mode else "View mode")
 
     def closeEvent(self, a0):
         CardViewerWindow._instance = None

@@ -14,6 +14,7 @@ from aqt.qt import (
     QVBoxLayout,
     QLabel,
     QSizePolicy,
+    QInputDialog,
     pyqtSignal,
 )
 
@@ -142,9 +143,57 @@ body {
     padding: 12px;
 }
 .deck-cards:empty { display: none; }
+
+/* ── Add-card button ── */
+.add-card-btn {
+    border: 2px dashed color-mix(in srgb, CanvasText 20%, Canvas);
+    border-radius: 6px;
+    padding: 32px 16px;
+    margin-bottom: 12px;
+    break-inside: avoid;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 36px; color: color-mix(in srgb, CanvasText 30%, Canvas);
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+    user-select: none;
+}
+.add-card-btn:hover {
+    border-color: color-mix(in srgb, CanvasText 50%, Canvas);
+    color: color-mix(in srgb, CanvasText 60%, Canvas);
+    background: color-mix(in srgb, CanvasText 4%, Canvas);
+}
+
+/* ── Deck header context menu ── */
+.deck-ctx-menu {
+    display: none; position: fixed;
+    background: Canvas; color: CanvasText;
+    border: 1px solid color-mix(in srgb, CanvasText 25%, Canvas); border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.25); z-index: 300;
+    min-width: 160px; overflow: hidden;
+}
+.deck-ctx-menu.open { display: block; }
+.deck-ctx-menu button {
+    display: block; width: 100%; padding: 8px 14px;
+    border: none; background: none; text-align: left;
+    cursor: pointer; font-size: 13px; color: CanvasText;
+}
+.deck-ctx-menu button:hover { background: color-mix(in srgb, CanvasText 10%, Canvas); }
+
+/* ── View mode: hide edit affordances ── */
+body.view-mode .add-card-btn,
+body.view-mode .card-menu-btn,
+body.view-mode .deck-btn {
+    display: none;
+}
+body.view-mode .deck-header { cursor: pointer; }
 """
 
 _TRAY_JS = """\
+var _editMode = false;
+function setEditMode(on) {
+    _editMode = on;
+    document.body.classList.toggle('view-mode', !on);
+}
 function toggleMenu(e, id) {
     e.stopPropagation();
     document.querySelectorAll('.card-menu.open').forEach(m => {
@@ -173,6 +222,33 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeOverlay
 
 function deckAction(e, action, deckId) {
     e.stopPropagation();
+    pycmd(action + ':' + deckId);
+}
+function addCard(e, deckId) {
+    e.stopPropagation();
+    pycmd('add_card:' + deckId);
+}
+
+/* ── Deck header context menu (right-click) ── */
+var _ctxMenu = null;
+function showDeckCtx(e, deckId) {
+    if (!_editMode) return;
+    e.preventDefault(); e.stopPropagation();
+    closeDeckCtx();
+    var menu = document.getElementById('ctx-' + deckId);
+    if (!menu) return;
+    menu.style.left = e.clientX + 'px';
+    menu.style.top = e.clientY + 'px';
+    menu.classList.add('open');
+    _ctxMenu = menu;
+}
+function closeDeckCtx() {
+    if (_ctxMenu) { _ctxMenu.classList.remove('open'); _ctxMenu = null; }
+}
+document.addEventListener('click', closeDeckCtx);
+function ctxAction(e, action, deckId) {
+    e.stopPropagation();
+    closeDeckCtx();
     pycmd(action + ':' + deckId);
 }
 function toggleSection(deckId) {
@@ -343,9 +419,13 @@ class CardTray(QWidget):
     # Emits deck_id of the section currently visible at the top of the scroll
     visible_section_changed = pyqtSignal(object)
 
+    # Emits when a new subdeck is created (so the viewer can refresh the tree)
+    subdeck_created = pyqtSignal()
+
     def __init__(self, title: str = "", parent=None):
         super().__init__(parent)
 
+        self._edit_mode: bool = False
         self._collapsed_decks: set[int] = set()
 
         layout = QVBoxLayout(self)
@@ -369,6 +449,15 @@ class CardTray(QWidget):
     @title.setter
     def title(self, value: str):
         self._header.setText(value)
+
+    @property
+    def edit_mode(self) -> bool:
+        return self._edit_mode
+
+    @edit_mode.setter
+    def edit_mode(self, value: bool) -> None:
+        self._edit_mode = value
+        self._web.eval(f"setEditMode({'true' if value else 'false'})")
 
     # ── Bridge commands from JS ──
 
@@ -407,6 +496,34 @@ class CardTray(QWidget):
                 col.sched.set_due_date([CardId(c) for c in cids], "0")
                 col.decks.set_current(DeckId(deck_id))
                 mw.moveToState("review")
+            return
+
+        if action == "add_card":
+            deck_id = int(payload)
+            col.decks.set_current(DeckId(deck_id))
+            from aqt.addcards import AddCards
+            add = AddCards(mw)
+            add.show()
+            return
+
+        if action == "add_subdeck":
+            deck_id = int(payload)
+            deck = col.decks.get(DeckId(deck_id))
+            if not deck:
+                return
+            parent_name = deck["name"]
+            name, ok = QInputDialog.getText(
+                self, "New Subdeck", f"Subdeck name under {parent_name}:"
+            )
+            if ok and name.strip():
+                full_name = f"{parent_name}::{name.strip()}"
+                col.decks.id(full_name)
+                if self._tree_root is not None:
+                    from .decks import find_deck_node
+                    new_root = find_deck_node(self._tree_root.deck_id)
+                    if new_root:
+                        self.set_deck_tree(new_root, self._tree_name)
+                self.subdeck_created.emit()
             return
 
         if action in ("suspend", "unsuspend", "review_now"):
@@ -462,7 +579,17 @@ class CardTray(QWidget):
 
         body = ""
         if root_cards:
-            body += f'<div class="deck-cards">{root_cards}</div>'
+            body += (
+                f'<div class="deck-cards">{root_cards}'
+                f'<div class="add-card-btn" onclick="addCard(event,{root_node.deck_id})" title="Add card to this deck">+</div>'
+                f'</div>'
+            )
+        else:
+            body += (
+                f'<div class="deck-cards">'
+                f'<div class="add-card-btn" onclick="addCard(event,{root_node.deck_id})" title="Add card to this deck">+</div>'
+                f'</div>'
+            )
         body += child_sections
 
         self._render_page(body)
@@ -511,7 +638,8 @@ class CardTray(QWidget):
 
         return (
             f'<div class="deck-section" data-deck-id="{deck_id}">'
-            f'<div class="deck-header depth-{d}" onclick="toggleSection({deck_id})">'
+            f'<div class="deck-header depth-{d}" onclick="toggleSection({deck_id})"'
+            f' oncontextmenu="showDeckCtx(event,{deck_id})">'
             f'<span class="{arrow_cls}" id="arrow-{deck_id}">\u25bc</span>'
             f'<span class="deck-name">{name_html}</span>'
             f'<span class="deck-info">'
@@ -521,8 +649,14 @@ class CardTray(QWidget):
             f'</span>'
             f'</div>'
             f'<div class="{body_cls}" id="body-{deck_id}">'
-            f'<div class="deck-cards">{cards_html}</div>'
+            f'<div class="deck-cards">{cards_html}'
+            f'<div class="add-card-btn" onclick="addCard(event,{deck_id})" title="Add card to this deck">+</div>'
+            f'</div>'
             f'{children_html}'
+            f'</div>'
+            f'<div class="deck-ctx-menu" id="ctx-{deck_id}">'
+            f'<button onclick="ctxAction(event,\'add_subdeck\',{deck_id})">Add subdeck\u2026</button>'
+            f'<button onclick="ctxAction(event,\'add_card\',{deck_id})">Add card\u2026</button>'
             f'</div>'
             f'</div>'
         )

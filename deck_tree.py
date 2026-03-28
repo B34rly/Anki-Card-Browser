@@ -5,6 +5,8 @@ from aqt.qt import (
     QVBoxLayout,
     QTreeWidget,
     QTreeWidgetItem,
+    QMenu,
+    QInputDialog,
     Qt,
     pyqtSignal,
 )
@@ -17,15 +19,29 @@ class DeckTree(QWidget):
     # Use 'object' for deck_id — Anki IDs are 64-bit and overflow C++ int
     deck_selected = pyqtSignal(object, str)
 
+    # Emits when a subdeck is created via the context menu
+    subdeck_created = pyqtSignal()
+
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
+        self._edit_mode: bool = False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
         self._tree = QTreeWidget()
         self._tree.setHeaderHidden(True)
+        self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._tree.customContextMenuRequested.connect(self._on_context_menu)
         self._tree.itemClicked.connect(self._on_item_clicked)
         layout.addWidget(self._tree)
+
+    @property
+    def edit_mode(self) -> bool:
+        return self._edit_mode
+
+    @edit_mode.setter
+    def edit_mode(self, value: bool) -> None:
+        self._edit_mode = value
 
     def populate(self, root_node, parent_path: str = "") -> None:
         """Build the tree from an Anki DeckTreeNode (the selected top-level deck)."""
@@ -48,6 +64,42 @@ class DeckTree(QWidget):
         full_name = item.data(0, Qt.ItemDataRole.UserRole + 1)
         if deck_id is not None:
             self.deck_selected.emit(int(deck_id), full_name)
+
+    def _on_context_menu(self, pos) -> None:
+        if not self._edit_mode:
+            return
+        item = self._tree.itemAt(pos)
+        if item is None:
+            return
+        deck_id = item.data(0, Qt.ItemDataRole.UserRole)
+        full_name = item.data(0, Qt.ItemDataRole.UserRole + 1)
+        if deck_id is None:
+            return
+
+        from aqt import mw
+        from anki.decks import DeckId
+
+        menu = QMenu(self)
+        add_subdeck_action = menu.addAction("Add subdeck\u2026")
+        add_card_action = menu.addAction("Add card\u2026")
+        chosen = menu.exec(self._tree.viewport().mapToGlobal(pos))
+
+        col = mw.col
+        if col is None:
+            return
+
+        if chosen == add_subdeck_action:
+            name, ok = QInputDialog.getText(
+                self, "New Subdeck", f"Subdeck name under {full_name}:"
+            )
+            if ok and name.strip():
+                col.decks.id(f"{full_name}::{name.strip()}")
+                self.subdeck_created.emit()
+        elif chosen == add_card_action:
+            col.decks.set_current(DeckId(int(deck_id)))
+            from aqt.addcards import AddCards
+            add = AddCards(mw)
+            add.show()
 
     def highlight_deck(self, deck_id: int) -> None:
         """Select the tree item for *deck_id* without emitting signals."""
