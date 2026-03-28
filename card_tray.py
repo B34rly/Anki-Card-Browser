@@ -51,9 +51,9 @@ body {
 .card-frame.suspended { opacity: 0.45; }
 
 /* ── IO grouped card ── */
-.io-container { position: relative; display: block; width: 100%; overflow: hidden; line-height: 0; }
-.io-container img { display: block; width: 100%; height: auto; }
-.io-overlay { position: absolute; inset: 0; pointer-events: none; }
+.io-container { position: relative; display: inline-block; max-width: 100%; overflow: hidden; line-height: 0; }
+.io-container img { display: block; max-width: 100%; height: auto; }
+.io-container svg { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
 .io-badge {
     display: inline-block; font-size: 11px; color: GrayText;
     background: color-mix(in srgb, CanvasText 8%, Canvas); border-radius: 4px; padding: 2px 8px;
@@ -440,7 +440,7 @@ def _build_io_card_html(
         f'  <div class="card-content">'
         f'    <div class="io-container">'
         f'      <img src="{img_src}"/>'
-        f'      <svg class="io-overlay" viewBox="0 0 1 1" preserveAspectRatio="none">'
+        f'      <svg viewBox="0 0 1 1" preserveAspectRatio="none">'
         f'        {svg_shapes}'
         f'      </svg>'
         f'    </div>'
