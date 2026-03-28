@@ -42,6 +42,9 @@ class CardViewerWindow(QMainWindow):
         self._deck_tree.deck_selected.connect(self._on_tree_deck_selected)
         left_layout.addWidget(self._deck_tree, 1)
 
+        # Will be connected after tray is created
+        self._tray_signal_connected = False
+
         # ── Splitter: left panel | card tray ──
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
         self._splitter.setHandleWidth(5)
@@ -50,6 +53,7 @@ class CardViewerWindow(QMainWindow):
         self._splitter.addWidget(left_panel)
 
         self.tray = CardTray()
+        self.tray.visible_section_changed.connect(self._on_visible_section)
         self._splitter.addWidget(self.tray)
 
         self._splitter.setSizes([260, 840])
@@ -93,6 +97,9 @@ class CardViewerWindow(QMainWindow):
 
     def _on_tree_deck_selected(self, deck_id: int, full_name: str) -> None:
         self.tray.scroll_to_deck(deck_id)
+
+    def _on_visible_section(self, deck_id: int) -> None:
+        self._deck_tree.highlight_deck(deck_id)
 
     def closeEvent(self, a0):
         CardViewerWindow._instance = None

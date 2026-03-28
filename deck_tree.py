@@ -48,3 +48,25 @@ class DeckTree(QWidget):
         full_name = item.data(0, Qt.ItemDataRole.UserRole + 1)
         if deck_id is not None:
             self.deck_selected.emit(int(deck_id), full_name)
+
+    def highlight_deck(self, deck_id: int) -> None:
+        """Select the tree item for *deck_id* without emitting signals."""
+        item = self._find_item(deck_id)
+        if item is None:
+            return
+        self._tree.blockSignals(True)
+        self._tree.setCurrentItem(item)
+        self._tree.scrollToItem(item)
+        self._tree.blockSignals(False)
+
+    def _find_item(self, deck_id: int, root: QTreeWidgetItem | None = None) -> QTreeWidgetItem | None:
+        if root is None:
+            root = self._tree.invisibleRootItem()
+        for i in range(root.childCount()):
+            child = root.child(i)
+            if child.data(0, Qt.ItemDataRole.UserRole) == deck_id:
+                return child
+            found = self._find_item(deck_id, child)
+            if found is not None:
+                return found
+        return None

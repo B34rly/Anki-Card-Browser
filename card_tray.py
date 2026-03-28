@@ -14,6 +14,7 @@ from aqt.qt import (
     QVBoxLayout,
     QLabel,
     QSizePolicy,
+    pyqtSignal,
 )
 
 
@@ -122,8 +123,19 @@ body {
     transition: transform 0.2s ease;
 }
 .collapse-arrow.collapsed { transform: rotate(-90deg); }
-.deck-name { flex: 1; }
-.card-count { color: GrayText; font-size: 12px; }
+.deck-name { flex: 1; min-width: 0; }
+.deck-path { color: GrayText; font-size: 0.85em; }
+.deck-leaf { font-weight: bold; }
+.deck-info { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.card-count {
+    color: GrayText; font-size: 12px; white-space: nowrap;
+}
+.deck-btn {
+    padding: 2px 8px; border: 1px solid color-mix(in srgb, CanvasText 20%, Canvas);
+    border-radius: 4px; background: Canvas; color: CanvasText;
+    font-size: 11px; cursor: pointer; white-space: nowrap;
+}
+.deck-btn:hover { background: color-mix(in srgb, CanvasText 10%, Canvas); }
 .deck-body.collapsed { display: none; }
 .deck-cards {
     column-width: 320px; column-gap: 12px;
@@ -159,6 +171,10 @@ function closeOverlay() {
 }
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeOverlay(); });
 
+function deckAction(e, action, deckId) {
+    e.stopPropagation();
+    pycmd(action + ':' + deckId);
+}
 function toggleSection(deckId) {
     var body = document.getElementById('body-' + deckId);
     var arrow = document.getElementById('arrow-' + deckId);
@@ -186,6 +202,31 @@ function scrollToSection(deckId) {
         setTimeout(function(){ hdr.classList.remove('highlight'); }, 1500);
     }
 }
+
+/* ── Scroll-spy: track which section header is near the top ── */
+(function() {
+    var lastId = null;
+    var observer = new IntersectionObserver(function(entries) {
+        /* Find the topmost visible header */
+        var best = null;
+        document.querySelectorAll('.deck-header').forEach(function(h) {
+            var r = h.getBoundingClientRect();
+            if (r.top < window.innerHeight * 0.35) best = h;
+        });
+        if (!best) return;
+        var sec = best.closest('.deck-section');
+        if (!sec) return;
+        var id = sec.getAttribute('data-deck-id');
+        if (id && id !== lastId) {
+            lastId = id;
+            pycmd('visible_section:' + id);
+        }
+    }, { threshold: 0 });
+    /* Observe all headers once DOM is ready */
+    document.querySelectorAll('.deck-header').forEach(function(h) {
+        observer.observe(h);
+    });
+})();
 """
 
 # Regex to extract mask data-attributes from cloze/cloze-inactive/cloze-highlight divs
@@ -299,6 +340,9 @@ def _build_io_card_html(
 class CardTray(QWidget):
     """Displays cards in a single AnkiWebView with hover, expand, and menu."""
 
+    # Emits deck_id of the section currently visible at the top of the scroll
+    visible_section_changed = pyqtSignal(object)
+
     def __init__(self, title: str = "", parent=None):
         super().__init__(parent)
 
@@ -336,10 +380,33 @@ class CardTray(QWidget):
             return
         action, payload = cmd.split(":", 1)
 
+        if action == "visible_section":
+            self.visible_section_changed.emit(int(payload))
+            return
+
         # Collapse/expand state — no re-render needed
         if action == "toggle_section":
             deck_id = int(payload)
             self._collapsed_decks.symmetric_difference_update({deck_id})
+            return
+
+        if action == "review_due_deck":
+            # Open Anki's reviewer filtered to this deck (due cards only)
+            deck_id = int(payload)
+            deck = col.decks.get(DeckId(deck_id))
+            if deck:
+                col.decks.set_current(DeckId(deck_id))
+                mw.moveToState("review")
+            return
+
+        if action == "force_review_deck":
+            # Set all cards in the deck to due today, then start review
+            deck_id = int(payload)
+            cids = col.decks.cids(DeckId(deck_id), children=True)
+            if cids:
+                col.sched.set_due_date([CardId(c) for c in cids], "0")
+                col.decks.set_current(DeckId(deck_id))
+                mw.moveToState("review")
             return
 
         if action in ("suspend", "unsuspend", "review_now"):
@@ -390,7 +457,8 @@ class CardTray(QWidget):
 
         child_sections = ""
         for child in root_node.children:
-            child_sections += self._build_section(col, child, depth=0)
+            child_path = f"{root_name}::{child.name}"
+            child_sections += self._build_section(col, child, full_path=child_path, depth=0)
 
         body = ""
         if root_cards:
@@ -399,7 +467,27 @@ class CardTray(QWidget):
 
         self._render_page(body)
 
-    def _build_section(self, col, node, depth: int) -> str:
+    @staticmethod
+    def _format_deck_path(full_path: str) -> str:
+        """Return a truncated path-style label with the leaf part bolded."""
+        parts = full_path.split("::")
+        leaf = _esc(parts[-1])
+        if len(parts) <= 2:
+            prefix_parts = [_esc(p) for p in parts[:-1]]
+        else:
+            # total chars in last 3 parts (including separators)
+            tail3 = parts[-3:]
+            tail2 = parts[-2:]
+            if sum(len(p) for p in tail3) + 4 <= 50:  # 2 separators
+                prefix_parts = ["..."] + [_esc(p) for p in tail3[:-1]]
+            else:
+                prefix_parts = ["..."] + [_esc(p) for p in tail2[:-1]]
+        prefix = "::".join(prefix_parts)
+        if prefix:
+            return f'<span class="deck-path">{prefix}::</span><span class="deck-leaf">{leaf}</span>'
+        return f'<span class="deck-leaf">{leaf}</span>'
+
+    def _build_section(self, col, node, full_path: str, depth: int) -> str:
         """Recursively build HTML for a collapsible deck section."""
         deck_id = node.deck_id
         own_cids = col.decks.cids(DeckId(deck_id), children=False)
@@ -409,7 +497,8 @@ class CardTray(QWidget):
 
         children_html = ""
         for child in node.children:
-            children_html += self._build_section(col, child, depth + 1)
+            child_path = f"{full_path}::{child.name}"
+            children_html += self._build_section(col, child, full_path=child_path, depth=depth + 1)
 
         if not own_cids and not children_html:
             return ""
@@ -417,15 +506,19 @@ class CardTray(QWidget):
         collapsed = deck_id in self._collapsed_decks
         arrow_cls = "collapse-arrow collapsed" if collapsed else "collapse-arrow"
         body_cls = "deck-body collapsed" if collapsed else "deck-body"
-        short_name = _esc(node.name)
+        name_html = self._format_deck_path(full_path)
         d = min(depth, 4)
 
         return (
             f'<div class="deck-section" data-deck-id="{deck_id}">'
             f'<div class="deck-header depth-{d}" onclick="toggleSection({deck_id})">'
             f'<span class="{arrow_cls}" id="arrow-{deck_id}">\u25bc</span>'
-            f'<span class="deck-name">{short_name}</span>'
-            f'<span class="card-count">({len(all_cids)})</span>'
+            f'<span class="deck-name">{name_html}</span>'
+            f'<span class="deck-info">'
+            f'<span class="card-count">{len(all_cids)} cards</span>'
+            f'<button class="deck-btn" onclick="deckAction(event,\'review_due_deck\',{deck_id})">Review due</button>'
+            f'<button class="deck-btn" onclick="deckAction(event,\'force_review_deck\',{deck_id})">Force review all</button>'
+            f'</span>'
             f'</div>'
             f'<div class="{body_cls}" id="body-{deck_id}">'
             f'<div class="deck-cards">{cards_html}</div>'
