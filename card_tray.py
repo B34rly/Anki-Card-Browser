@@ -41,12 +41,18 @@ body {
     break-inside: avoid;
     cursor: pointer;
     overflow: hidden;
-    transition: box-shadow 0.15s ease, transform 0.15s ease, opacity 0.15s ease;
+    transition: box-shadow 0.2s ease, transform 0.2s ease, opacity 0.15s ease;
+    transform-origin: center center;
 }
 .card-frame img { max-width: 100%; height: auto; display: block; }
 .card-frame:hover {
-    box-shadow: 0 2px 12px rgba(0,0,0,0.12);
-    transform: translateY(-1px);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+    transform: scale(1.03);
+    z-index: 10;
+}
+.card-frame:active {
+    transform: scale(0.98);
+    transition: transform 0.1s ease;
 }
 .card-frame.suspended { opacity: 0.45; }
 
@@ -93,17 +99,27 @@ body {
 /* ── Overlay for expanded card ── */
 #overlay {
     display: none; position: fixed; inset: 0;
-    background: rgba(0,0,0,0.55);
-    backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+    background: rgba(0,0,0,0);
+    backdrop-filter: blur(0px); -webkit-backdrop-filter: blur(0px);
     z-index: 200;
     justify-content: center; align-items: center;
+    transition: background 0.3s ease, backdrop-filter 0.3s ease, -webkit-backdrop-filter 0.3s ease;
 }
 #overlay.open { display: flex; }
+#overlay.visible {
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+}
 #overlay-card {
     background: Canvas; color: CanvasText; border-radius: 12px;
     padding: 28px; max-width: 85vw; max-height: 85vh;
     overflow: auto; position: relative;
     box-shadow: 0 8px 40px rgba(0,0,0,0.3);
+    transform: scale(0.9); opacity: 0;
+    transition: transform 0.25s ease, opacity 0.25s ease;
+}
+#overlay.visible #overlay-card {
+    transform: scale(1); opacity: 1;
 }
 #overlay-card img { max-width: 100%; height: auto; }
 #overlay-close {
@@ -113,6 +129,9 @@ body {
     transition: color 0.1s ease;
 }
 #overlay-close:hover { color: CanvasText; }
+
+/* Lock scroll when overlay is open */
+body.overlay-open { overflow: hidden; padding-right: var(--scrollbar-w, 0px); }
 
 /* ── Deck sections ── */
 .deck-header {
@@ -159,7 +178,13 @@ body {
     background: color-mix(in srgb, CanvasText 8%, Canvas);
     border-color: color-mix(in srgb, CanvasText 25%, Canvas);
 }
-.deck-body.collapsed { display: none; }
+.deck-body {
+    overflow: visible;
+    transition: height 0.3s ease;
+}
+.deck-body.collapsed {
+    overflow: hidden;
+}
 .deck-cards {
     column-width: 320px; column-gap: 14px;
     padding: 14px;
@@ -176,7 +201,8 @@ body {
     cursor: pointer;
     display: flex; align-items: center; justify-content: center;
     font-size: 28px; color: color-mix(in srgb, CanvasText 25%, Canvas);
-    transition: border-color 0.15s, color 0.15s, background 0.15s;
+    transition: border-color 0.15s, color 0.15s, background 0.15s,
+               opacity 0.25s ease, visibility 0.25s ease;
     user-select: none;
 }
 .add-card-btn:hover {
@@ -203,13 +229,15 @@ body {
 }
 .deck-ctx-menu button:hover { background: color-mix(in srgb, CanvasText 8%, Canvas); }
 
-/* ── View mode: hide edit affordances ── */
-body.view-mode .add-card-btn,
-body.view-mode .card-menu-btn,
-body.view-mode .deck-btn {
-    display: none;
+/* ── View mode: hide edit-only elements ── */
+body.view-mode .add-card-btn {
+    opacity: 0; visibility: hidden;
+    pointer-events: none;
 }
-body.view-mode .deck-header { cursor: pointer; }
+body.view-mode .card-menu-btn {
+    opacity: 0; visibility: hidden;
+    pointer-events: none;
+}
 
 /* ── Dark mode refinements ── */
 @media (prefers-color-scheme: dark) {
@@ -251,9 +279,23 @@ function expandCard(el) {
     const inner = document.getElementById('overlay-card-content');
     inner.innerHTML = el.querySelector('.card-content').innerHTML;
     overlay.classList.add('open');
+    var scrollbarW = window.innerWidth - document.documentElement.clientWidth;
+    document.documentElement.style.setProperty('--scrollbar-w', scrollbarW + 'px');
+    document.body.classList.add('overlay-open');
+    /* Trigger animated entrance on next frame */
+    requestAnimationFrame(function() {
+        requestAnimationFrame(function() {
+            overlay.classList.add('visible');
+        });
+    });
 }
 function closeOverlay() {
-    document.getElementById('overlay').classList.remove('open');
+    const overlay = document.getElementById('overlay');
+    overlay.classList.remove('visible');
+    document.body.classList.remove('overlay-open');
+    document.documentElement.style.removeProperty('--scrollbar-w');
+    /* Wait for exit animation then hide */
+    setTimeout(function() { overlay.classList.remove('open'); }, 280);
 }
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeOverlay(); });
 
@@ -291,7 +333,22 @@ function ctxAction(e, action, deckId) {
 function toggleSection(deckId) {
     var body = document.getElementById('body-' + deckId);
     var arrow = document.getElementById('arrow-' + deckId);
-    if (body) body.classList.toggle('collapsed');
+    if (!body) return;
+    if (body.style.height === '0px') {
+        /* Expand */
+        body.style.height = body.scrollHeight + 'px';
+        body.addEventListener('transitionend', function handler() {
+            body.style.height = 'auto';
+            body.classList.remove('collapsed');
+            body.removeEventListener('transitionend', handler);
+        });
+    } else {
+        /* Collapse: set explicit height first so transition has a start value */
+        body.classList.add('collapsed');
+        body.style.height = body.scrollHeight + 'px';
+        body.offsetHeight; /* force reflow */
+        body.style.height = '0px';
+    }
     if (arrow) arrow.classList.toggle('collapsed');
     pycmd('toggle_section:' + deckId);
 }
@@ -300,7 +357,8 @@ function scrollToSection(deckId) {
     if (!el) return;
     var p = el.parentElement;
     while (p) {
-        if (p.classList && p.classList.contains('deck-body') && p.classList.contains('collapsed')) {
+        if (p.classList && p.classList.contains('deck-body') && p.style.height === '0px') {
+            p.style.height = 'auto';
             p.classList.remove('collapsed');
             var id = p.id.replace('body-', '');
             var a = document.getElementById('arrow-' + id);
@@ -669,7 +727,7 @@ class CardTray(QWidget):
 
         collapsed = deck_id in self._collapsed_decks
         arrow_cls = "collapse-arrow collapsed" if collapsed else "collapse-arrow"
-        body_cls = "deck-body collapsed" if collapsed else "deck-body"
+        body_style = ' style="height:0px"' if collapsed else ''
         name_html = self._format_deck_path(full_path)
         d = min(depth, 4)
 
@@ -685,7 +743,7 @@ class CardTray(QWidget):
             f'<button class="deck-btn" onclick="deckAction(event,\'force_review_deck\',{deck_id})">Force review all</button>'
             f'</span>'
             f'</div>'
-            f'<div class="{body_cls}" id="body-{deck_id}">'
+            f'<div class="deck-body{" collapsed" if collapsed else ""}" id="body-{deck_id}"{body_style}>'
             f'<div class="deck-cards">{cards_html}'
             f'<div class="add-card-btn" onclick="addCard(event,{deck_id})" title="Add card to this deck">+</div>'
             f'</div>'
