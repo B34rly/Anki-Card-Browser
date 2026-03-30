@@ -194,6 +194,14 @@ body.overlay-open { overflow: hidden; padding-right: var(--scrollbar-w, 0px); }
 .card-count {
     color: GrayText; font-size: 12px; white-space: nowrap;
 }
+.state-counts {
+    display: inline; font-size: inherit; font-weight: 600;
+}
+.sc { font-weight: 600; }
+.sc-new { color: var(--state-new-color); }
+.sc-learn { color: var(--state-learn-color); }
+.sc-due { color: var(--state-review-color); }
+.sc-upcoming { color: var(--state-review-50); }
 .deck-btn {
     padding: 3px 10px; border: 1px solid color-mix(in srgb, CanvasText 15%, Canvas);
     border-radius: 4px; background: Canvas; color: CanvasText;

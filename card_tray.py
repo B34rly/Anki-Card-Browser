@@ -400,6 +400,38 @@ class CardTray(QWidget):
 
         self._render_page(body)
 
+    @staticmethod
+    def _state_counts_html(col, all_cids: Sequence[int]) -> str:
+        """Build compact coloured state-count spans for a deck header."""
+        total = len(all_cids)
+        new = learn = due = upcoming = 0
+        if all_cids:
+            meta = get_cards_metadata(col, all_cids)
+            today = col.sched.today
+            for cid in all_cids:
+                m = meta.get(cid)
+                if m is None:
+                    continue
+                st = card_state_from_meta(m, today)
+                if st == "new":
+                    new += 1
+                elif st == "learn":
+                    learn += 1
+                elif st == "review-due":
+                    due += 1
+                elif st in ("review-soon", "review-mid", "review-later"):
+                    upcoming += 1
+        counts = (
+            f'<span class="sc sc-new">{new}N</span> '
+            f'<span class="sc sc-learn">{learn}L</span> '
+            f'<span class="sc sc-upcoming">{upcoming}U</span> '
+            f'<span class="sc sc-due">{due}D</span>'
+        )
+        return (
+            f'<span class="card-count">{total} '
+            f'<span class="state-counts">({counts})</span> cards</span>'
+        )
+
     def _build_section(self, col, node, full_path: str, depth: int) -> str:
         """Recursively build HTML for a collapsible deck section."""
         deck_id = node.deck_id
@@ -423,6 +455,7 @@ class CardTray(QWidget):
         body_style = ' style="height:0px"' if collapsed else ''
         name_html = format_deck_path(full_path)
         d = min(depth, 4)
+        sc_html = self._state_counts_html(col, all_cids)
 
         plus_menu = (
             f'<div class="plus-menu" id="plus-menu-{deck_id}">'
@@ -442,7 +475,7 @@ class CardTray(QWidget):
             f'<span class="deck-info">'
             f'<button class="header-plus-btn" onclick="togglePlusMenu(event,{deck_id})" title="Add\u2026">+</button>'
             f'{plus_menu}'
-            f'<span class="card-count">{len(all_cids)} cards</span>'
+            f'{sc_html}'
             f'<button class="deck-btn" onclick="deckAction(event,\'review_due_deck\',{deck_id})">Review due</button>'
             f'<button class="deck-btn" onclick="deckAction(event,\'force_review_deck\',{deck_id})">Force review all</button>'
             f'</span>'
