@@ -414,7 +414,8 @@ class CardTray(QWidget):
             child_path = f"{full_path}::{child.name}"
             children_html += self._build_section(col, child, full_path=child_path, depth=depth + 1)
 
-        if not own_filtered and not children_html:
+        has_filters = bool(self._search_text or self._active_chips or self._tag_filter or self._criteria)
+        if not own_filtered and not children_html and not node.children and has_filters:
             return ""
 
         collapsed = deck_id in self._collapsed_decks
