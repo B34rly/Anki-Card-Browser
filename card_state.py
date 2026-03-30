@@ -1,12 +1,13 @@
-"""Card state classification, countdown formatting, and theme color helpers.
+"""Card state classification, countdown formatting, filtering, sorting, and theme color helpers.
 
 Determines the visual state of a card (new, learn, review-due, etc.)
 based on its queue/type/due metadata, and provides the corresponding
-badge HTML and CSS color variables.
+badge HTML, CSS color variables, and bulk filter/sort operations.
 """
 from __future__ import annotations
 
 import time
+from collections.abc import Sequence
 from html import escape as _esc
 
 from anki.consts import (
@@ -21,6 +22,16 @@ from anki.consts import (
     QUEUE_TYPE_MANUALLY_BURIED,
     QUEUE_TYPE_SIBLING_BURIED,
 )
+
+# ── Filter chip names → internal state strings ──
+# Used by the UI filter chips.
+FILTER_CHIP_STATES: dict[str, list[str]] = {
+    "new": ["new"],
+    "learning": ["learn"],
+    "due": ["review-due"],
+    "upcoming": ["review-soon", "review-mid", "review-later"],
+    "suspended": [],  # special: matches queue == QUEUE_TYPE_SUSPENDED
+}
 
 # ── SVG icons for the state badge ──
 
@@ -157,3 +168,85 @@ def get_state_colors() -> dict[str, str]:
         "--state-review-mid-bg": _hex_to_rgba(review_hex, 0.06),
         "--state-review-later-bg": _hex_to_rgba(review_hex, 0.04),
     }
+
+
+# ── Bulk filtering by state ──
+
+def filter_cards_by_states(
+    meta: dict[int, dict],
+    today: int,
+    active_chips: set[str],
+) -> set[int]:
+    """Return the set of card IDs that match any of the active filter chip names.
+
+    active_chips is a set of keys from FILTER_CHIP_STATES (e.g. {"new", "due"}).
+    An empty set means "show all" (no filtering).
+    """
+    if not active_chips:
+        return set(meta.keys())
+
+    # Expand chip names into allowed state strings
+    allowed_states: set[str] = set()
+    include_suspended = "suspended" in active_chips
+    for chip in active_chips:
+        if chip in FILTER_CHIP_STATES:
+            allowed_states.update(FILTER_CHIP_STATES[chip])
+
+    result: set[int] = set()
+    for cid, m in meta.items():
+        is_susp = m["queue"] == QUEUE_TYPE_SUSPENDED
+        if include_suspended and is_susp:
+            result.add(cid)
+            continue
+        if not include_suspended and is_susp:
+            # When suspended chip is not active, suspended cards are still
+            # shown (they're visually dimmed). But if *any* state chip is
+            # active, only show suspended cards if "suspended" is toggled.
+            continue
+        state = card_state_from_meta(m, today)
+        if state in allowed_states:
+            result.add(cid)
+    return result
+
+
+# ── Sorting ──
+
+SORT_KEYS = ["deck", "due", "state"]
+
+
+def sort_cards(
+    card_ids: Sequence[int],
+    meta: dict[int, dict],
+    today: int,
+    sort_key: str,
+) -> list[int]:
+    """Return card_ids sorted according to sort_key.
+
+    'deck'  — original order (no-op).
+    'due'   — by due date ascending; new cards last.
+    'state' — by STATE_PRIORITY descending (most urgent first).
+    """
+    if sort_key == "deck" or sort_key not in SORT_KEYS:
+        return list(card_ids)
+
+    if sort_key == "due":
+        def due_key(cid: int) -> tuple[int, int]:
+            m = meta.get(cid)
+            if not m:
+                return (1, 0)
+            # New cards sort last (group 1), everything else group 0
+            if m["queue"] == QUEUE_TYPE_NEW or m["type"] == CARD_TYPE_NEW:
+                return (1, cid)
+            return (0, m["due"])
+        return sorted(card_ids, key=due_key)
+
+    if sort_key == "state":
+        def state_key(cid: int) -> int:
+            m = meta.get(cid)
+            if not m:
+                return 0
+            st = card_state_from_meta(m, today)
+            return -STATE_PRIORITY.get(st, 0)
+        return sorted(card_ids, key=state_key)
+
+    return list(card_ids)

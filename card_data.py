@@ -1,7 +1,7 @@
 """Data-access helpers for card metadata and Image Occlusion parsing.
 
-Provides bulk SQL fetching of card metadata and regex-based extraction
-of IO mask data from Anki's card answer HTML.
+Provides bulk SQL fetching of card metadata, content search, tag queries,
+and regex-based extraction of IO mask data from Anki's card answer HTML.
 """
 from __future__ import annotations
 
@@ -31,6 +31,101 @@ def get_cards_metadata(col, card_ids: Sequence[int]) -> dict[int, dict]:
                 "due": r[3], "nid": r[4], "mid": r[5],
             }
     return result
+
+
+# ── Strip HTML tags for plain-text content search ──
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def search_cards_by_content(col, card_ids: Sequence[int], query: str) -> list[int]:
+    """Return the subset of card_ids whose note fields contain *query* (case-insensitive).
+
+    Searches against notes.flds with HTML tags stripped.
+    """
+    if not card_ids or not query:
+        return list(card_ids)
+    query_lower = query.lower()
+    matched: list[int] = []
+    chunk_size = 500
+    for i in range(0, len(card_ids), chunk_size):
+        chunk = card_ids[i : i + chunk_size]
+        placeholders = ",".join("?" * len(chunk))
+        rows = col.db.all(
+            f"SELECT c.id, n.flds "
+            f"FROM cards c JOIN notes n ON c.nid = n.id "
+            f"WHERE c.id IN ({placeholders})",
+            *chunk,
+        )
+        for cid, flds in rows:
+            plain = _HTML_TAG_RE.sub("", flds).lower()
+            if query_lower in plain:
+                matched.append(cid)
+    return matched
+
+
+def get_tags_for_cards(col, card_ids: Sequence[int]) -> list[str]:
+    """Return sorted distinct tags from notes associated with the given cards."""
+    if not card_ids:
+        return []
+    tag_set: set[str] = set()
+    chunk_size = 500
+    for i in range(0, len(card_ids), chunk_size):
+        chunk = card_ids[i : i + chunk_size]
+        placeholders = ",".join("?" * len(chunk))
+        rows = col.db.all(
+            f"SELECT DISTINCT n.tags "
+            f"FROM cards c JOIN notes n ON c.nid = n.id "
+            f"WHERE c.id IN ({placeholders})",
+            *chunk,
+        )
+        for (tags_str,) in rows:
+            for t in tags_str.strip().split():
+                if t:
+                    tag_set.add(t)
+    return sorted(tag_set, key=str.lower)
+
+
+def get_card_tags_map(col, card_ids: Sequence[int]) -> dict[int, list[str]]:
+    """Return {cid: [tag, ...]} for the given cards."""
+    if not card_ids:
+        return {}
+    result: dict[int, list[str]] = {}
+    chunk_size = 500
+    for i in range(0, len(card_ids), chunk_size):
+        chunk = card_ids[i : i + chunk_size]
+        placeholders = ",".join("?" * len(chunk))
+        rows = col.db.all(
+            f"SELECT c.id, n.tags "
+            f"FROM cards c JOIN notes n ON c.nid = n.id "
+            f"WHERE c.id IN ({placeholders})",
+            *chunk,
+        )
+        for cid, tags_str in rows:
+            result[cid] = [t for t in tags_str.strip().split() if t]
+    return result
+
+
+def filter_cards_by_tag(col, card_ids: Sequence[int], tag: str) -> list[int]:
+    """Return the subset of card_ids whose note has the given tag."""
+    if not card_ids or not tag:
+        return list(card_ids)
+    tag_lower = tag.lower()
+    matched: list[int] = []
+    chunk_size = 500
+    for i in range(0, len(card_ids), chunk_size):
+        chunk = card_ids[i : i + chunk_size]
+        placeholders = ",".join("?" * len(chunk))
+        rows = col.db.all(
+            f"SELECT c.id, n.tags "
+            f"FROM cards c JOIN notes n ON c.nid = n.id "
+            f"WHERE c.id IN ({placeholders})",
+            *chunk,
+        )
+        for cid, tags_str in rows:
+            tags = [t.lower() for t in tags_str.strip().split() if t]
+            if tag_lower in tags:
+                matched.append(cid)
+    return matched
 
 
 # Cache IO notetype lookups per model id

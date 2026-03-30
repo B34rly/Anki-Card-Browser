@@ -10,6 +10,8 @@ from aqt.qt import (
     QLineEdit,
     QSplitter,
     QToolButton,
+    QLabel,
+    QPushButton,
     QIcon,
     QPixmap,
     QTimer,
@@ -17,6 +19,7 @@ from aqt.qt import (
 )
 
 from .card_tray import CardTray
+from .card_state import FILTER_CHIP_STATES, SORT_KEYS
 from .deck_tree import DeckTree
 from .decks import get_top_level_decks, find_deck_node
 
@@ -70,6 +73,27 @@ QToolButton:hover {
 QToolButton:checked {
     background: palette(highlight);
     color: palette(highlighted-text);
+}
+QPushButton#filterChip {
+    padding: 3px 10px;
+    border: 1px solid palette(mid);
+    border-radius: 10px;
+    background: palette(base);
+    font-size: 12px;
+    min-height: 20px;
+}
+QPushButton#filterChip:hover {
+    border-color: palette(dark);
+}
+QPushButton#filterChip:checked {
+    border-color: palette(highlight);
+    background: palette(highlight);
+    color: palette(highlighted-text);
+}
+QLabel#filterLabel {
+    font-size: 12px;
+    color: palette(mid);
+    padding: 0 2px;
 }
 """
 
@@ -144,10 +168,89 @@ class CardViewerWindow(QMainWindow):
 
         self._splitter.addWidget(left_panel)
 
+        # ── Right panel: filter toolbar + card tray ──
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+
+        # Filter toolbar
+        toolbar = QWidget()
+        toolbar_layout = QHBoxLayout(toolbar)
+        toolbar_layout.setContentsMargins(8, 6, 8, 6)
+        toolbar_layout.setSpacing(6)
+
+        # Card content search
+        self._card_search = QLineEdit()
+        self._card_search.setPlaceholderText("Search card content\u2026")
+        self._card_search.setClearButtonEnabled(True)
+        self._card_search.setMaximumWidth(220)
+        self._search_timer = QTimer()
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(300)
+        self._search_timer.timeout.connect(self._apply_filters)
+        self._card_search.textChanged.connect(lambda: self._search_timer.start())
+        toolbar_layout.addWidget(self._card_search)
+
+        # Separator
+        sep1 = QLabel("\u2502")
+        sep1.setObjectName("filterLabel")
+        toolbar_layout.addWidget(sep1)
+
+        # State filter chips
+        self._chip_buttons: dict[str, QPushButton] = {}
+        chip_labels = {
+            "new": "New",
+            "learning": "Learning",
+            "due": "Due",
+            "upcoming": "Upcoming",
+            "suspended": "Suspended",
+        }
+        for key, label in chip_labels.items():
+            btn = QPushButton(label)
+            btn.setObjectName("filterChip")
+            btn.setCheckable(True)
+            btn.toggled.connect(self._on_chip_toggled)
+            toolbar_layout.addWidget(btn)
+            self._chip_buttons[key] = btn
+
+        # Separator
+        sep2 = QLabel("\u2502")
+        sep2.setObjectName("filterLabel")
+        toolbar_layout.addWidget(sep2)
+
+        # Tag filter dropdown
+        tag_label = QLabel("Tag:")
+        tag_label.setObjectName("filterLabel")
+        toolbar_layout.addWidget(tag_label)
+        self._tag_combo = QComboBox()
+        self._tag_combo.addItem("All tags", userData="")
+        self._tag_combo.setMinimumWidth(100)
+        self._tag_combo.currentIndexChanged.connect(self._apply_filters)
+        toolbar_layout.addWidget(self._tag_combo)
+
+        # Sort dropdown
+        sort_label = QLabel("Sort:")
+        sort_label.setObjectName("filterLabel")
+        toolbar_layout.addWidget(sort_label)
+        self._sort_combo = QComboBox()
+        self._sort_combo.addItem("Deck order", userData="deck")
+        self._sort_combo.addItem("Due date", userData="due")
+        self._sort_combo.addItem("Card state", userData="state")
+        self._sort_combo.setMinimumWidth(100)
+        self._sort_combo.currentIndexChanged.connect(self._apply_filters)
+        toolbar_layout.addWidget(self._sort_combo)
+
+        toolbar_layout.addStretch(1)
+        right_layout.addWidget(toolbar)
+
         self.tray = CardTray()
         self.tray.visible_section_changed.connect(self._on_visible_section)
         self.tray.subdeck_created.connect(self._refresh_current_deck)
-        self._splitter.addWidget(self.tray)
+        self.tray.tags_updated.connect(self._on_tags_updated)
+        right_layout.addWidget(self.tray, 1)
+
+        self._splitter.addWidget(right_panel)
 
         self._splitter.setSizes([260, 840])
         self._splitter.setStretchFactor(0, 0)
@@ -205,6 +308,34 @@ class CardViewerWindow(QMainWindow):
 
     def _on_search_changed(self, text: str) -> None:
         self._deck_tree.filter(text)
+
+    # ── Filter toolbar ──
+
+    def _on_chip_toggled(self, _checked: bool) -> None:
+        self._apply_filters()
+
+    def _on_tags_updated(self, tags: list) -> None:
+        """Called when the tray emits a new tag list for the current deck."""
+        prev_tag = self._tag_combo.currentData()
+        self._tag_combo.blockSignals(True)
+        self._tag_combo.clear()
+        self._tag_combo.addItem("All tags", userData="")
+        for t in tags:
+            self._tag_combo.addItem(t, userData=t)
+        # Restore previous selection if still present
+        if prev_tag:
+            idx = self._tag_combo.findData(prev_tag)
+            if idx >= 0:
+                self._tag_combo.setCurrentIndex(idx)
+        self._tag_combo.blockSignals(False)
+
+    def _apply_filters(self) -> None:
+        """Gather current filter/sort state and push to the tray."""
+        search_text = self._card_search.text().strip()
+        active_chips = {k for k, btn in self._chip_buttons.items() if btn.isChecked()}
+        tag_filter = self._tag_combo.currentData() or ""
+        sort_key = self._sort_combo.currentData() or "deck"
+        self.tray.set_filters(search_text, active_chips, tag_filter, sort_key)
 
     def _on_mode_toggled(self, checked: bool) -> None:
         self._edit_mode = checked

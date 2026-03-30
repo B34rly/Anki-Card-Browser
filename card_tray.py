@@ -24,12 +24,17 @@ from .card_state import (
     card_countdown_from_meta,
     build_state_badge,
     get_state_colors,
+    filter_cards_by_states,
+    sort_cards,
     STATE_PRIORITY,
 )
 from .card_data import (
     get_cards_metadata,
     is_io_mid,
     extract_io_data,
+    search_cards_by_content,
+    filter_cards_by_tag,
+    get_tags_for_cards,
     ACTIVE_ORDINAL_RE,
 )
 from .card_rendering import (
@@ -48,12 +53,21 @@ class CardTray(QWidget):
     # Emits when a new subdeck is created (so the viewer can refresh the tree)
     subdeck_created = pyqtSignal()
 
+    # Emits sorted list of tag strings for the current deck
+    tags_updated = pyqtSignal(list)
+
     def __init__(self, title: str = "", parent=None):
         super().__init__(parent)
 
         self._edit_mode: bool = False
         self._collapsed_decks: set[int] = set()
         self._io_group_map: dict[int, list[int]] = {}  # lead_cid → [group cids]
+
+        # Filter/sort state (set from viewer toolbar)
+        self._search_text: str = ""
+        self._active_chips: set[str] = set()
+        self._tag_filter: str = ""
+        self._sort_key: str = "deck"
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -185,11 +199,62 @@ class CardTray(QWidget):
     _tree_root = None
     _tree_name: str = ""
 
+    def set_filters(
+        self,
+        search_text: str = "",
+        active_chips: set[str] | None = None,
+        tag_filter: str = "",
+        sort_key: str = "deck",
+    ) -> None:
+        """Update filter/sort state and re-render if a deck tree is loaded."""
+        self._search_text = search_text
+        self._active_chips = active_chips or set()
+        self._tag_filter = tag_filter
+        self._sort_key = sort_key
+        if self._tree_root is not None:
+            self._render_deck_tree(emit_tags=False)
+
+    def _apply_filters(self, col, card_ids: Sequence[int]) -> list[int]:
+        """Apply search, state, tag filters and sorting to a list of card IDs."""
+        cids = list(card_ids)
+        if not cids:
+            return cids
+
+        # Content search
+        if self._search_text:
+            cids = search_cards_by_content(col, cids, self._search_text)
+
+        # Tag filter
+        if self._tag_filter:
+            cids = filter_cards_by_tag(col, cids, self._tag_filter)
+
+        # State filter
+        if self._active_chips:
+            meta = get_cards_metadata(col, cids)
+            today = col.sched.today
+            allowed = filter_cards_by_states(meta, today, self._active_chips)
+            cids = [c for c in cids if c in allowed]
+
+        # Sorting
+        if self._sort_key != "deck":
+            meta = get_cards_metadata(col, cids)
+            today = col.sched.today
+            cids = sort_cards(cids, meta, today, self._sort_key)
+
+        return cids
+
     def set_deck_tree(self, root_node, root_name: str) -> None:
         """Render all subdecks as collapsible sections in one webview."""
         self._tree_root = root_node
         self._tree_name = root_name
         self._current_card_ids = None
+        self._io_group_map.clear()
+        self._render_deck_tree(emit_tags=True)
+
+    def _render_deck_tree(self, emit_tags: bool = True) -> None:
+        """Internal render — builds and pushes HTML for the current deck tree."""
+        root_node = self._tree_root
+        root_name = self._tree_name
         self._io_group_map.clear()
 
         col = mw.col
@@ -198,11 +263,24 @@ class CardTray(QWidget):
             return
 
         all_cids = col.decks.cids(DeckId(root_node.deck_id), children=True)
-        self.title = f"{root_name}  ({len(all_cids)} cards)"
 
-        # Root deck's own cards at the top (the header label already names the deck)
+        # Emit available tags for the toolbar dropdown (only on deck change)
+        if emit_tags:
+            tags = get_tags_for_cards(col, all_cids)
+            self.tags_updated.emit(tags)
+
+        # Pre-compute filtered total for title
+        has_filters = bool(self._search_text or self._active_chips or self._tag_filter)
+        if has_filters:
+            filtered_total = self._apply_filters(col, all_cids)
+            self.title = f"{root_name}  ({len(filtered_total)} / {len(all_cids)} cards)"
+        else:
+            self.title = f"{root_name}  ({len(all_cids)} cards)"
+
+        # Apply filters to root's own cards
         root_own = col.decks.cids(DeckId(root_node.deck_id), children=False)
-        root_cards = self._build_cards_html(col, root_own) if root_own else ""
+        root_own_filtered = self._apply_filters(col, root_own)
+        root_cards = self._build_cards_html(col, root_own_filtered) if root_own_filtered else ""
 
         child_sections = ""
         for child in root_node.children:
@@ -232,14 +310,15 @@ class CardTray(QWidget):
         own_cids = col.decks.cids(DeckId(deck_id), children=False)
         all_cids = col.decks.cids(DeckId(deck_id), children=True)
 
-        cards_html = self._build_cards_html(col, own_cids) if own_cids else ""
+        own_filtered = self._apply_filters(col, own_cids)
+        cards_html = self._build_cards_html(col, own_filtered) if own_filtered else ""
 
         children_html = ""
         for child in node.children:
             child_path = f"{full_path}::{child.name}"
             children_html += self._build_section(col, child, full_path=child_path, depth=depth + 1)
 
-        if not own_cids and not children_html:
+        if not own_filtered and not children_html:
             return ""
 
         collapsed = deck_id in self._collapsed_decks
