@@ -1,11 +1,25 @@
 from __future__ import annotations
 
+import json
 import re
+import time
 from collections.abc import Sequence
 from html import escape as _esc
 
 from anki.cards import CardId
-from anki.consts import QUEUE_TYPE_SUSPENDED
+from anki.consts import (
+    CARD_TYPE_NEW,
+    CARD_TYPE_LRN,
+    CARD_TYPE_REV,
+    CARD_TYPE_RELEARNING,
+    QUEUE_TYPE_NEW,
+    QUEUE_TYPE_LRN,
+    QUEUE_TYPE_REV,
+    QUEUE_TYPE_DAY_LEARN_RELEARN,
+    QUEUE_TYPE_SUSPENDED,
+    QUEUE_TYPE_MANUALLY_BURIED,
+    QUEUE_TYPE_SIBLING_BURIED,
+)
 from anki.decks import DeckId
 from aqt import mw
 from aqt.webview import AnkiWebView, AnkiWebViewKind
@@ -43,6 +57,8 @@ body {
     overflow: hidden;
     transition: box-shadow 0.2s ease, transform 0.2s ease, opacity 0.15s ease;
     transform-origin: center center;
+    content-visibility: auto;
+    contain-intrinsic-size: auto 200px;
 }
 .card-frame img { max-width: 100%; height: auto; display: block; }
 .card-frame:hover {
@@ -239,6 +255,57 @@ body.view-mode .card-menu-btn {
     pointer-events: none;
 }
 
+/* ── Card state indicators ── */
+.card-frame.state-new          { border-bottom: 3px solid var(--state-new-color); }
+.card-frame.state-learn        { border-bottom: 3px solid var(--state-learn-color); }
+.card-frame.state-review-due   { border-bottom: 3px solid var(--state-review-color); }
+.card-frame.state-review-soon  { border-bottom: 2px dotted var(--state-review-70); }
+.card-frame.state-review-mid   { border-bottom: 2px dotted var(--state-review-50); }
+.card-frame.state-review-later { border-bottom: 2px dotted var(--state-review-30); }
+
+.card-state-badge {
+    position: absolute; top: 8px; left: 10px;
+    display: flex; align-items: center; gap: 4px;
+    font-size: 11px; line-height: 1;
+    border-radius: 4px; padding: 2px 6px;
+    pointer-events: none; z-index: 5;
+}
+.state-new .card-state-badge {
+    color: var(--state-new-color);
+    background: var(--state-new-bg);
+}
+.state-learn .card-state-badge {
+    color: var(--state-learn-color);
+    background: var(--state-learn-bg);
+}
+.state-review-due .card-state-badge {
+    color: var(--state-review-color);
+    background: var(--state-review-bg);
+}
+.state-review-soon .card-state-badge {
+    color: var(--state-review-70);
+    background: var(--state-review-soon-bg);
+}
+.state-review-mid .card-state-badge {
+    color: var(--state-review-50);
+    background: var(--state-review-mid-bg);
+}
+.state-review-later .card-state-badge {
+    color: var(--state-review-30);
+    background: var(--state-review-later-bg);
+}
+.card-state-icon { display: inline-flex; }
+.card-state-text { font-weight: 600; white-space: nowrap; }
+
+/* ── Lazy-load placeholders ── */
+.card-placeholder {
+    min-height: 80px;
+    display: flex; align-items: center; justify-content: center;
+}
+.card-placeholder .placeholder-inner {
+    color: GrayText; font-size: 12px;
+}
+
 /* ── Dark mode refinements ── */
 @media (prefers-color-scheme: dark) {
     .card-frame:hover {
@@ -398,7 +465,232 @@ function scrollToSection(deckId) {
         observer.observe(h);
     });
 })();
+
+/* ── Lazy loading via IntersectionObserver ── */
+var _lazyPending = new Set();
+var _lazyTimer = null;
+var _lazyObserver = new IntersectionObserver(function(entries) {
+    entries.forEach(function(entry) {
+        if (entry.isIntersecting) {
+            var el = entry.target;
+            var key = el.getAttribute('data-lazy');
+            if (key) _lazyPending.add(key);
+            _lazyObserver.unobserve(el);
+        }
+    });
+    if (_lazyPending.size > 0 && !_lazyTimer) {
+        _lazyTimer = setTimeout(_flushLazy, 16);
+    }
+}, { rootMargin: '400px' });
+
+function _flushLazy() {
+    _lazyTimer = null;
+    if (_lazyPending.size === 0) return;
+    var batch = Array.from(_lazyPending).slice(0, 20);
+    batch.forEach(function(k) { _lazyPending.delete(k); });
+    pycmd('lazy_load:' + batch.join(','));
+    /* If more remain, schedule next batch */
+    if (_lazyPending.size > 0) {
+        _lazyTimer = setTimeout(_flushLazy, 50);
+    }
+}
+
+function fillCards(data) {
+    for (var key in data) {
+        var el = document.querySelector('[data-lazy="' + key + '"]');
+        if (el) {
+            var tmp = document.createElement('div');
+            tmp.innerHTML = data[key].trim();
+            var card = tmp.firstElementChild;
+            if (card) {
+                el.parentNode.replaceChild(card, el);
+            }
+        }
+    }
+}
+
+function initLazy() {
+    document.querySelectorAll('.card-placeholder[data-lazy]').forEach(function(el) {
+        _lazyObserver.observe(el);
+    });
+}
+initLazy();
 """
+
+# ── Card state helpers ──
+
+_STATE_ICONS = {
+    "new": (
+        '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">'
+        '<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 '
+        '3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>'
+    ),
+    "learn": (
+        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2.5" stroke-linecap="round" '
+        'stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>'
+    ),
+    "review": (
+        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2.5" stroke-linecap="round" '
+        'stroke-linejoin="round"><circle cx="12" cy="12" r="10"/>'
+        '<path d="M12 6v6l4 2"/></svg>'
+    ),
+}
+
+_STATE_PRIORITY = {
+    "learn": 6, "review-due": 5, "review-soon": 4,
+    "review-mid": 3, "review-later": 2, "new": 1, "": 0,
+}
+
+
+def _card_state_from_meta(meta: dict, today: int = 0) -> str:
+    """Return the card's visual state string.
+
+    Review cards are split into sub-states based on days until due:
+      'review-due'   — due today or overdue
+      'review-soon'  — due in 1-3 days
+      'review-mid'   — due in 4-14 days
+      'review-later'  — due in 15+ days
+    """
+    q = meta["queue"]
+    if q == QUEUE_TYPE_SUSPENDED or q in (QUEUE_TYPE_MANUALLY_BURIED, QUEUE_TYPE_SIBLING_BURIED):
+        return ""
+    if q == QUEUE_TYPE_NEW or meta["type"] == CARD_TYPE_NEW:
+        return "new"
+    if q in (QUEUE_TYPE_LRN, QUEUE_TYPE_DAY_LEARN_RELEARN) or meta["type"] in (CARD_TYPE_LRN, CARD_TYPE_RELEARNING):
+        return "learn"
+    # Review card — determine urgency sub-state
+    days = meta["due"] - today if today else 0
+    if days <= 0:
+        return "review-due"
+    if days <= 3:
+        return "review-soon"
+    if days <= 14:
+        return "review-mid"
+    return "review-later"
+
+
+def _card_countdown_from_meta(meta: dict, today: int) -> str:
+    """Return a succinct countdown string from a metadata row dict."""
+    q = meta["queue"]
+    if q in (QUEUE_TYPE_NEW, QUEUE_TYPE_SUSPENDED, QUEUE_TYPE_MANUALLY_BURIED, QUEUE_TYPE_SIBLING_BURIED):
+        return ""
+    if q == QUEUE_TYPE_LRN:
+        secs = int(meta["due"] - time.time())
+        return _fmt_seconds(secs) if secs > 0 else ""
+    if q in (QUEUE_TYPE_REV, QUEUE_TYPE_DAY_LEARN_RELEARN):
+        days = meta["due"] - today
+        if days <= 0:
+            return "Due"
+        return _fmt_days(days)
+    return ""
+
+
+def _fmt_seconds(secs: int) -> str:
+    if secs < 60:
+        return f"{secs}s"
+    if secs < 3600:
+        return f"{secs // 60}m"
+    if secs < 86400:
+        return f"{secs // 3600}h"
+    return _fmt_days(secs // 86400)
+
+
+def _fmt_days(days: int) -> str:
+    if days <= 0:
+        return ""
+    if days == 1:
+        return "1 day"
+    if days < 30:
+        return f"{days} days"
+    if days < 365:
+        mo = days // 30
+        return f"{mo} mo"
+    yr = days // 365
+    return f"{yr} yr"
+
+
+def _build_state_badge(state: str, countdown: str) -> str:
+    """Build the HTML for the state badge shown in the card corner."""
+    if not state:
+        return ""
+    # Review sub-states all share the 'review' icon
+    icon_key = "review" if state.startswith("review") else state
+    icon = _STATE_ICONS.get(icon_key, "")
+    text = f'<span class="card-state-text">{_esc(countdown)}</span>' if countdown else ""
+    return f'<span class="card-state-badge"><span class="card-state-icon">{icon}</span>{text}</span>'
+
+
+def _get_state_colors() -> dict[str, str]:
+    """Return a dict of CSS variable values for state colors, including bg variants."""
+    try:
+        from aqt import colors as c
+        from aqt.theme import theme_manager as tm
+        new_hex = tm.var(c.STATE_NEW)
+        learn_hex = tm.var(c.STATE_LEARN)
+        review_hex = tm.var(c.STATE_REVIEW)
+    except Exception:
+        new_hex, learn_hex, review_hex = "#3b82f6", "#dc2626", "#16a34a"
+
+    def _hex_to_rgba(h: str, alpha: float) -> str:
+        h = h.lstrip("#")
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return f"rgba({r},{g},{b},{alpha})"
+
+    return {
+        "--state-new-color": new_hex,
+        "--state-learn-color": learn_hex,
+        "--state-review-color": review_hex,
+        "--state-review-70": _hex_to_rgba(review_hex, 0.70),
+        "--state-review-50": _hex_to_rgba(review_hex, 0.50),
+        "--state-review-30": _hex_to_rgba(review_hex, 0.30),
+        "--state-new-bg": _hex_to_rgba(new_hex, 0.12),
+        "--state-learn-bg": _hex_to_rgba(learn_hex, 0.12),
+        "--state-review-bg": _hex_to_rgba(review_hex, 0.12),
+        "--state-review-soon-bg": _hex_to_rgba(review_hex, 0.08),
+        "--state-review-mid-bg": _hex_to_rgba(review_hex, 0.06),
+        "--state-review-later-bg": _hex_to_rgba(review_hex, 0.04),
+    }
+
+
+def _get_cards_metadata(col, card_ids: Sequence[int]) -> dict[int, dict]:
+    """Bulk-fetch card metadata in one SQL query instead of N get_card() calls."""
+    if not card_ids:
+        return {}
+    # Process in chunks to avoid SQLite variable limit
+    result: dict[int, dict] = {}
+    chunk_size = 500
+    for i in range(0, len(card_ids), chunk_size):
+        chunk = card_ids[i : i + chunk_size]
+        placeholders = ",".join("?" * len(chunk))
+        rows = col.db.all(
+            f"SELECT c.id, c.type, c.queue, c.due, c.nid, n.mid "
+            f"FROM cards c JOIN notes n ON c.nid = n.id "
+            f"WHERE c.id IN ({placeholders})",
+            *chunk,
+        )
+        for r in rows:
+            result[r[0]] = {
+                "cid": r[0], "type": r[1], "queue": r[2],
+                "due": r[3], "nid": r[4], "mid": r[5],
+            }
+    return result
+
+
+# Cache IO notetype lookups per model id
+_io_mid_cache: dict[int, bool] = {}
+
+
+def _is_io_mid(col, mid: int) -> bool:
+    """Check if a model id is an Image Occlusion notetype (cached)."""
+    if mid in _io_mid_cache:
+        return _io_mid_cache[mid]
+    nt = col.models.get(mid)
+    result = nt is not None and "image occlusion" in nt["name"].lower()
+    _io_mid_cache[mid] = result
+    return result
+
 
 # Regex to extract mask data-attributes from cloze/cloze-inactive/cloze-highlight divs
 _MASK_RE = re.compile(
@@ -409,15 +701,6 @@ _MASK_RE = re.compile(
 _ATTR_RE = re.compile(r'data-(shape|left|top|width|height|rx|ry|angle|points|fill)="([^"]*)"')
 _ACTIVE_ORDINAL_RE = re.compile(r'class="cloze"\s+data-ordinal="(\d+)"')
 _IMG_RE = re.compile(r'<img\s[^>]*src="([^"]*)"[^>]*/?\s*>')
-
-
-def _is_image_occlusion_note(col, note_id: int) -> bool:
-    """Check if a note uses the Image Occlusion notetype."""
-    note = col.get_note(note_id)
-    nt = col.models.get(note.mid)
-    if nt is None:
-        return False
-    return "image occlusion" in nt["name"].lower()
 
 
 def _extract_io_data(answer_html: str) -> tuple[str | None, list[dict]]:
@@ -475,9 +758,16 @@ def _build_io_card_html(
     card_ids: list[int],
     suspended_ordinals: set[str],
     all_suspended: bool,
+    state: str = "",
+    countdown: str = "",
 ) -> str:
     """Build a single grouped IO card with image + SVG mask overlay."""
-    cls = "card-frame suspended" if all_suspended else "card-frame"
+    cls_parts = ["card-frame"]
+    if all_suspended:
+        cls_parts.append("suspended")
+    if state:
+        cls_parts.append(f"state-{state}")
+    cls = " ".join(cls_parts)
     cids_str = ",".join(str(c) for c in card_ids)
     menu_id = card_ids[0]
     toggle_action = "unsuspend_group" if all_suspended else "suspend_group"
@@ -488,8 +778,11 @@ def _build_io_card_html(
         for m in masks
     )
 
+    badge = _build_state_badge(state, countdown)
+
     return (
         f'<div class="{cls}" onclick="expandCard(this)">'
+        f'  {badge}'
         f'  <button class="card-menu-btn" onclick="toggleMenu(event,\'{menu_id}\')">&#8942;</button>'
         f'  <div class="card-menu" id="menu-{menu_id}">'
         f'    <button onclick="cardAction(event,\'{toggle_action}\',\'{cids_str}\')">{toggle_label}</button>'
@@ -522,6 +815,7 @@ class CardTray(QWidget):
 
         self._edit_mode: bool = False
         self._collapsed_decks: set[int] = set()
+        self._io_group_map: dict[int, list[int]] = {}  # lead_cid → [group cids]
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -572,6 +866,10 @@ class CardTray(QWidget):
         if action == "toggle_section":
             deck_id = int(payload)
             self._collapsed_decks.symmetric_difference_update({deck_id})
+            return
+
+        if action == "lazy_load":
+            self._on_lazy_load(col, payload)
             return
 
         if action == "review_due_deck":
@@ -654,6 +952,7 @@ class CardTray(QWidget):
         self._tree_root = root_node
         self._tree_name = root_name
         self._current_card_ids = None
+        self._io_group_map.clear()
 
         col = mw.col
         if col is None:
@@ -757,19 +1056,23 @@ class CardTray(QWidget):
         )
 
     def _build_cards_html(self, col, card_ids: Sequence[int]) -> str:
-        """Build card HTML fragments for a list of card IDs (with IO grouping)."""
+        """Build lightweight placeholder HTML for lazy-loaded cards."""
         if not card_ids:
             return ""
 
+        meta = _get_cards_metadata(col, card_ids)
+        today = col.sched.today
+
+        # Group IO cards by note using bulk metadata
         note_groups: dict[int, list[int]] = {}
-        io_notes: set[int] = set()
         order: list[tuple[str, int]] = []
 
         for cid in card_ids:
-            card = col.get_card(CardId(cid))
-            nid = card.nid
-            if _is_image_occlusion_note(col, nid):
-                io_notes.add(nid)
+            m = meta.get(cid)
+            if m is None:
+                continue
+            if _is_io_mid(col, m["mid"]):
+                nid = m["nid"]
                 if nid not in note_groups:
                     note_groups[nid] = []
                     order.append(("note", nid))
@@ -780,14 +1083,64 @@ class CardTray(QWidget):
         parts: list[str] = []
         for kind, eid in order:
             if kind == "note":
-                parts.append(self._build_io_group(col, note_groups[eid]))
+                group_cids = note_groups[eid]
+                lead_cid = group_cids[0]
+                self._io_group_map[lead_cid] = group_cids
+
+                # Determine group state from metadata
+                group_state = ""
+                group_countdown = ""
+                all_susp = True
+                for gcid in group_cids:
+                    gm = meta.get(gcid, {})
+                    if gm.get("queue") != QUEUE_TYPE_SUSPENDED:
+                        all_susp = False
+                        st = _card_state_from_meta(gm, today)
+                        if _STATE_PRIORITY.get(st, 0) > _STATE_PRIORITY.get(group_state, 0):
+                            group_state = st
+                            group_countdown = _card_countdown_from_meta(gm, today)
+
+                cls_parts = ["card-frame", "card-placeholder"]
+                if all_susp:
+                    cls_parts.append("suspended")
+                if group_state:
+                    cls_parts.append(f"state-{group_state}")
+                cls = " ".join(cls_parts)
+                badge = _build_state_badge(group_state, group_countdown)
+                n_cards = len(group_cids)
+                parts.append(
+                    f'<div class="{cls}" data-lazy="{lead_cid}">'
+                    f'  {badge}'
+                    f'  <div class="placeholder-inner">'
+                    f'    <span class="io-badge">{n_cards} occlusion cards</span>'
+                    f'  </div>'
+                    f'</div>'
+                )
             else:
-                parts.append(self._build_normal_card(col, eid))
+                cid = eid
+                m = meta.get(cid, {})
+                state = _card_state_from_meta(m, today)
+                countdown = _card_countdown_from_meta(m, today)
+                suspended = m.get("queue") == QUEUE_TYPE_SUSPENDED
+
+                cls_parts = ["card-frame", "card-placeholder"]
+                if suspended:
+                    cls_parts.append("suspended")
+                if state:
+                    cls_parts.append(f"state-{state}")
+                cls = " ".join(cls_parts)
+                badge = _build_state_badge(state, countdown)
+                parts.append(
+                    f'<div class="{cls}" data-lazy="{cid}">'
+                    f'  {badge}'
+                    f'  <div class="placeholder-inner"></div>'
+                    f'</div>'
+                )
 
         return "\n".join(parts)
 
     def _build_io_group(self, col, group_cids: list[int]) -> str:
-        """Build HTML for a group of IO cards sharing the same note."""
+        """Build full HTML for a group of IO cards (called during lazy load)."""
         first_card = col.get_card(CardId(group_cids[0]))
         answer_html = first_card.answer()
         img_src, masks = _extract_io_data(answer_html)
@@ -807,20 +1160,29 @@ class CardTray(QWidget):
         if img_src and masks:
             suspended_ords: set[str] = set()
             all_susp = True
+            group_state = ""
+            group_countdown = ""
+            today = col.sched.today
             for gcid in group_cids:
                 gc = col.get_card(CardId(gcid))
                 is_susp = gc.queue == QUEUE_TYPE_SUSPENDED
                 if not is_susp:
                     all_susp = False
+                    m = {"queue": gc.queue, "type": gc.type, "due": gc.due}
+                    st = _card_state_from_meta(m, today)
+                    if _STATE_PRIORITY.get(st, 0) > _STATE_PRIORITY.get(group_state, 0):
+                        group_state = st
+                        group_countdown = _card_countdown_from_meta(m, today)
                 q_html = gc.question()
-                m = _ACTIVE_ORDINAL_RE.search(q_html)
-                if m and is_susp:
-                    suspended_ords.add(m.group(1))
+                mo = _ACTIVE_ORDINAL_RE.search(q_html)
+                if mo and is_susp:
+                    suspended_ords.add(mo.group(1))
             return _build_io_card_html(
-                img_src, masks, group_cids, suspended_ords, all_susp
+                img_src, masks, group_cids, suspended_ords, all_susp,
+                state=group_state, countdown=group_countdown,
             )
         else:
-            return self._build_normal_card(col, group_cids[0])
+            return self._render_normal_card(col, group_cids[0])
 
     def scroll_to_deck(self, deck_id: int) -> None:
         """Scroll the webview to a specific deck section."""
@@ -828,8 +1190,12 @@ class CardTray(QWidget):
 
     def _render_page(self, body_html: str) -> None:
         """Render the full page with CSS, body content, overlay, and JS."""
+        color_map = _get_state_colors()
+        color_vars = ":root { " + " ".join(
+            f"{k}: {v};" for k, v in color_map.items()
+        ) + " }"
         self._web.stdHtml(
-            f"<style>{_TRAY_CSS}</style>"
+            f"<style>{color_vars}\n{_TRAY_CSS}</style>"
             f"{body_html}"
             f'<div id="overlay" onclick="closeOverlay()">'
             f'  <div id="overlay-card" onclick="event.stopPropagation()">'
@@ -841,10 +1207,25 @@ class CardTray(QWidget):
             context=self,
         )
 
+    def _on_lazy_load(self, col, payload: str) -> None:
+        """Handle lazy_load bridge command: render requested cards and inject."""
+        cids_str = [c.strip() for c in payload.split(",") if c.strip()]
+        results: dict[str, str] = {}
+        for cid_s in cids_str:
+            cid = int(cid_s)
+            if cid in self._io_group_map:
+                html = self._build_io_group(col, self._io_group_map[cid])
+            else:
+                html = self._render_normal_card(col, cid)
+            results[cid_s] = html
+        data_json = json.dumps(results)
+        self._web.eval(f"fillCards({data_json})")
+
     def set_cards(self, card_ids: Sequence[int]) -> None:
         """Render a flat list of cards (legacy single-deck view)."""
         self._current_card_ids = card_ids
         self._tree_root = None
+        self._io_group_map.clear()
         col = mw.col
         if col is None:
             self._web.stdHtml("<p>No collection loaded.</p>")
@@ -857,15 +1238,28 @@ class CardTray(QWidget):
         self._render_page(body)
 
     @staticmethod
-    def _build_normal_card(col, cid: int) -> str:
+    def _render_normal_card(col, cid: int) -> str:
+        """Render full card HTML (called during lazy load)."""
         card = col.get_card(CardId(cid))
         suspended = card.queue == QUEUE_TYPE_SUSPENDED
-        cls = "card-frame suspended" if suspended else "card-frame"
+        m = {"queue": card.queue, "type": card.type, "due": card.due}
+        state = _card_state_from_meta(m, col.sched.today)
+        countdown = _card_countdown_from_meta(m, col.sched.today)
+
+        cls_parts = ["card-frame"]
+        if suspended:
+            cls_parts.append("suspended")
+        if state:
+            cls_parts.append(f"state-{state}")
+        cls = " ".join(cls_parts)
+
         toggle_label = "Unsuspend" if suspended else "Suspend"
         toggle_action = "unsuspend" if suspended else "suspend"
         answer_html = card.answer()
+        badge = _build_state_badge(state, countdown)
         return (
             f'<div class="{cls}" onclick="expandCard(this)">'
+            f'  {badge}'
             f'  <button class="card-menu-btn" onclick="toggleMenu(event,{cid})">&#8942;</button>'
             f'  <div class="card-menu" id="menu-{cid}">'
             f'    <button onclick="cardAction(event,\'{toggle_action}\',{cid})">{toggle_label}</button>'
