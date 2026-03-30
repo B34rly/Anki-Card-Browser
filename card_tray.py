@@ -25,6 +25,7 @@ from .card_state import (
     build_state_badge,
     get_state_colors,
     filter_cards_by_states,
+    filter_cards_by_criteria,
     sort_cards,
     STATE_PRIORITY,
 )
@@ -35,6 +36,7 @@ from .card_data import (
     search_cards_by_content,
     filter_cards_by_tag,
     get_tags_for_cards,
+    get_flags_for_cards,
     ACTIVE_ORDINAL_RE,
 )
 from .card_rendering import (
@@ -56,6 +58,9 @@ class CardTray(QWidget):
     # Emits sorted list of tag strings for the current deck
     tags_updated = pyqtSignal(list)
 
+    # Emits sorted list of flag ints for the current deck
+    flags_updated = pyqtSignal(list)
+
     def __init__(self, title: str = "", parent=None):
         super().__init__(parent)
 
@@ -68,6 +73,8 @@ class CardTray(QWidget):
         self._active_chips: set[str] = set()
         self._tag_filter: str = ""
         self._sort_key: str = "deck"
+        self._sort_reverse: bool = False
+        self._criteria: dict = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -205,12 +212,16 @@ class CardTray(QWidget):
         active_chips: set[str] | None = None,
         tag_filter: str = "",
         sort_key: str = "deck",
+        sort_reverse: bool = False,
+        criteria: dict | None = None,
     ) -> None:
         """Update filter/sort state and re-render if a deck tree is loaded."""
         self._search_text = search_text
         self._active_chips = active_chips or set()
         self._tag_filter = tag_filter
         self._sort_key = sort_key
+        self._sort_reverse = sort_reverse
+        self._criteria = criteria or {}
         if self._tree_root is not None:
             self._render_deck_tree(emit_tags=False)
 
@@ -235,11 +246,17 @@ class CardTray(QWidget):
             allowed = filter_cards_by_states(meta, today, self._active_chips)
             cids = [c for c in cids if c in allowed]
 
+        # Advanced criteria filter
+        if self._criteria:
+            meta = get_cards_metadata(col, cids)
+            allowed = filter_cards_by_criteria(meta, self._criteria)
+            cids = [c for c in cids if c in allowed]
+
         # Sorting
-        if self._sort_key != "deck":
+        if self._sort_key != "deck" or self._sort_reverse:
             meta = get_cards_metadata(col, cids)
             today = col.sched.today
-            cids = sort_cards(cids, meta, today, self._sort_key)
+            cids = sort_cards(cids, meta, today, self._sort_key, self._sort_reverse)
 
         return cids
 
@@ -264,13 +281,15 @@ class CardTray(QWidget):
 
         all_cids = col.decks.cids(DeckId(root_node.deck_id), children=True)
 
-        # Emit available tags for the toolbar dropdown (only on deck change)
+        # Emit available tags and flags for the toolbar (only on deck change)
         if emit_tags:
             tags = get_tags_for_cards(col, all_cids)
             self.tags_updated.emit(tags)
+            flags = get_flags_for_cards(col, all_cids)
+            self.flags_updated.emit(flags)
 
         # Pre-compute filtered total for title
-        has_filters = bool(self._search_text or self._active_chips or self._tag_filter)
+        has_filters = bool(self._search_text or self._active_chips or self._tag_filter or self._criteria)
         if has_filters:
             filtered_total = self._apply_filters(col, all_cids)
             self.title = f"{root_name}  ({len(filtered_total)} / {len(all_cids)} cards)"

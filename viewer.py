@@ -6,12 +6,15 @@ from aqt.qt import (
     QWidget,
     QHBoxLayout,
     QVBoxLayout,
+    QFormLayout,
     QComboBox,
     QLineEdit,
     QSplitter,
     QToolButton,
     QLabel,
     QPushButton,
+    QSpinBox,
+    QFrame,
     QIcon,
     QPixmap,
     QTimer,
@@ -22,6 +25,12 @@ from .card_tray import CardTray
 from .card_state import FILTER_CHIP_STATES, SORT_KEYS
 from .deck_tree import DeckTree
 from .decks import get_top_level_decks, find_deck_node
+
+# ── Flag constants ──
+FLAG_NAMES: dict[int, str] = {
+    1: "Red", 2: "Orange", 3: "Green", 4: "Blue",
+    5: "Pink", 6: "Turquoise", 7: "Purple",
+}
 
 
 # ── Qt stylesheet for native widgets (palette-aware for light/dark) ──
@@ -74,6 +83,16 @@ QToolButton:checked {
     background: palette(highlight);
     color: palette(highlighted-text);
 }
+QPushButton#sortDirBtn {
+    padding: 4px;
+    border-radius: 4px;
+    border: 1px solid transparent;
+    background: transparent;
+}
+QPushButton#sortDirBtn:hover {
+    background: palette(midlight);
+    border-color: palette(mid);
+}
 QPushButton#filterChip {
     padding: 3px 10px;
     border: 1px solid palette(mid);
@@ -94,6 +113,62 @@ QLabel#filterLabel {
     font-size: 12px;
     color: palette(mid);
     padding: 0 2px;
+}
+QFrame#filterPanel {
+    background: palette(base);
+    border: 1px solid palette(mid);
+    border-radius: 6px;
+    padding: 10px;
+}
+QFrame#filterPanel QLabel {
+    font-size: 12px;
+}
+QFrame#filterPanel QSpinBox {
+    padding: 2px 4px;
+    border: 1px solid palette(mid);
+    border-radius: 3px;
+    background: palette(base);
+    min-width: 70px;
+    min-height: 20px;
+    font-size: 12px;
+}
+QFrame#filterPanel QComboBox {
+    padding: 3px 8px;
+    min-height: 20px;
+    font-size: 12px;
+}
+QPushButton#filterToggle {
+    padding: 3px 10px;
+    border: 1px solid palette(mid);
+    border-radius: 4px;
+    background: palette(base);
+    font-size: 12px;
+    min-height: 20px;
+}
+QPushButton#filterToggle:hover {
+    border-color: palette(dark);
+    background: palette(midlight);
+}
+QPushButton#filterToggle[hasFilters="true"] {
+    border-color: palette(highlight);
+    color: palette(highlight);
+}
+QPushButton#clearFilters {
+    padding: 3px 10px;
+    border: 1px solid palette(mid);
+    border-radius: 4px;
+    background: palette(base);
+    font-size: 11px;
+    min-height: 18px;
+}
+QPushButton#clearFilters:hover {
+    border-color: palette(dark);
+    background: palette(midlight);
+}
+QLabel#filterSummary {
+    font-size: 11px;
+    color: palette(highlight);
+    padding: 0 4px;
 }
 """
 
@@ -174,13 +249,12 @@ class CardViewerWindow(QMainWindow):
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(0)
 
-        # Filter toolbar
-        toolbar = QWidget()
-        toolbar_layout = QHBoxLayout(toolbar)
-        toolbar_layout.setContentsMargins(8, 6, 8, 6)
-        toolbar_layout.setSpacing(6)
+        # ── Row 1: search + state chips ──
+        row1 = QWidget()
+        row1_layout = QHBoxLayout(row1)
+        row1_layout.setContentsMargins(8, 6, 8, 2)
+        row1_layout.setSpacing(6)
 
-        # Card content search
         self._card_search = QLineEdit()
         self._card_search.setPlaceholderText("Search card content\u2026")
         self._card_search.setClearButtonEnabled(True)
@@ -190,14 +264,12 @@ class CardViewerWindow(QMainWindow):
         self._search_timer.setInterval(300)
         self._search_timer.timeout.connect(self._apply_filters)
         self._card_search.textChanged.connect(lambda: self._search_timer.start())
-        toolbar_layout.addWidget(self._card_search)
+        row1_layout.addWidget(self._card_search)
 
-        # Separator
         sep1 = QLabel("\u2502")
         sep1.setObjectName("filterLabel")
-        toolbar_layout.addWidget(sep1)
+        row1_layout.addWidget(sep1)
 
-        # State filter chips
         self._chip_buttons: dict[str, QPushButton] = {}
         chip_labels = {
             "new": "New",
@@ -211,43 +283,65 @@ class CardViewerWindow(QMainWindow):
             btn.setObjectName("filterChip")
             btn.setCheckable(True)
             btn.toggled.connect(self._on_chip_toggled)
-            toolbar_layout.addWidget(btn)
+            row1_layout.addWidget(btn)
             self._chip_buttons[key] = btn
 
-        # Separator
-        sep2 = QLabel("\u2502")
-        sep2.setObjectName("filterLabel")
-        toolbar_layout.addWidget(sep2)
+        row1_layout.addStretch(1)
+        right_layout.addWidget(row1)
 
-        # Tag filter dropdown
-        tag_label = QLabel("Tag:")
-        tag_label.setObjectName("filterLabel")
-        toolbar_layout.addWidget(tag_label)
-        self._tag_combo = QComboBox()
-        self._tag_combo.addItem("All tags", userData="")
-        self._tag_combo.setMinimumWidth(100)
-        self._tag_combo.currentIndexChanged.connect(self._apply_filters)
-        toolbar_layout.addWidget(self._tag_combo)
+        # ── Row 2: filter button + summary + sort ──
+        row2 = QWidget()
+        row2_layout = QHBoxLayout(row2)
+        row2_layout.setContentsMargins(8, 2, 8, 4)
+        row2_layout.setSpacing(6)
 
-        # Sort dropdown
+        self._filter_btn = QPushButton("\u2699 Filters")
+        self._filter_btn.setObjectName("filterToggle")
+        self._filter_btn.clicked.connect(self._toggle_filter_panel)
+        row2_layout.addWidget(self._filter_btn)
+
+        self._filter_summary = QLabel("")
+        self._filter_summary.setObjectName("filterSummary")
+        row2_layout.addWidget(self._filter_summary, 1)
+
         sort_label = QLabel("Sort:")
         sort_label.setObjectName("filterLabel")
-        toolbar_layout.addWidget(sort_label)
+        row2_layout.addWidget(sort_label)
         self._sort_combo = QComboBox()
         self._sort_combo.addItem("Deck order", userData="deck")
         self._sort_combo.addItem("Due date", userData="due")
         self._sort_combo.addItem("Card state", userData="state")
-        self._sort_combo.setMinimumWidth(100)
+        self._sort_combo.addItem("Sort field", userData="sort_field")
+        self._sort_combo.addItem("Ease", userData="ease")
+        self._sort_combo.addItem("Interval", userData="interval")
+        self._sort_combo.addItem("Lapse count", userData="lapses")
+        self._sort_combo.addItem("Review count", userData="reps")
+        self._sort_combo.addItem("Created", userData="created")
+        self._sort_combo.addItem("Last modified", userData="modified")
+        self._sort_combo.setMinimumWidth(120)
         self._sort_combo.currentIndexChanged.connect(self._apply_filters)
-        toolbar_layout.addWidget(self._sort_combo)
+        row2_layout.addWidget(self._sort_combo)
 
-        toolbar_layout.addStretch(1)
-        right_layout.addWidget(toolbar)
+        self._sort_dir_btn = QPushButton()
+        self._sort_dir_btn.setObjectName("sortDirBtn")
+        self._sort_ascending = True
+        self._sort_dir_btn.setToolTip("Toggle ascending / descending")
+        self._sort_dir_btn.clicked.connect(self._on_sort_dir_clicked)
+        self._update_sort_dir_icon()
+        row2_layout.addWidget(self._sort_dir_btn)
+
+        right_layout.addWidget(row2)
+
+        # ── Filter panel (collapsed by default) ──
+        self._filter_panel = self._build_filter_panel()
+        self._filter_panel.setVisible(False)
+        right_layout.addWidget(self._filter_panel)
 
         self.tray = CardTray()
         self.tray.visible_section_changed.connect(self._on_visible_section)
         self.tray.subdeck_created.connect(self._refresh_current_deck)
         self.tray.tags_updated.connect(self._on_tags_updated)
+        self.tray.flags_updated.connect(self._on_flags_updated)
         right_layout.addWidget(self.tray, 1)
 
         self._splitter.addWidget(right_panel)
@@ -311,6 +405,124 @@ class CardViewerWindow(QMainWindow):
 
     # ── Filter toolbar ──
 
+    def _build_filter_panel(self) -> QFrame:
+        """Build the collapsible advanced filter panel."""
+        panel = QFrame()
+        panel.setObjectName("filterPanel")
+        form = QFormLayout(panel)
+        form.setContentsMargins(12, 8, 12, 8)
+        form.setSpacing(6)
+        form.setHorizontalSpacing(12)
+
+        # Tag
+        self._tag_combo = QComboBox()
+        self._tag_combo.addItem("All tags", userData="")
+        self._tag_combo.setMinimumWidth(140)
+        self._tag_combo.currentIndexChanged.connect(self._apply_filters)
+        form.addRow("Tag:", self._tag_combo)
+
+        # Flag
+        self._flag_combo = QComboBox()
+        self._flag_combo.addItem("Any flag", userData=0)
+        self._flag_combo.setMinimumWidth(140)
+        self._flag_combo.currentIndexChanged.connect(self._apply_filters)
+        form.addRow("Flag:", self._flag_combo)
+
+        # Ease range
+        ease_row = QHBoxLayout()
+        ease_row.setSpacing(4)
+        self._ease_min = QSpinBox()
+        self._ease_min.setRange(0, 999)
+        self._ease_min.setValue(0)
+        self._ease_min.setSuffix("%")
+        self._ease_min.setSpecialValueText("Min")
+        self._ease_min.editingFinished.connect(self._apply_filters)
+        ease_row.addWidget(self._ease_min)
+        ease_row.addWidget(QLabel("\u2013"))
+        self._ease_max = QSpinBox()
+        self._ease_max.setRange(0, 999)
+        self._ease_max.setValue(0)
+        self._ease_max.setSuffix("%")
+        self._ease_max.setSpecialValueText("Max")
+        self._ease_max.editingFinished.connect(self._apply_filters)
+        ease_row.addWidget(self._ease_max)
+        ease_row.addStretch()
+        form.addRow("Ease:", ease_row)
+
+        # Interval range
+        ivl_row = QHBoxLayout()
+        ivl_row.setSpacing(4)
+        self._ivl_min = QSpinBox()
+        self._ivl_min.setRange(0, 99999)
+        self._ivl_min.setValue(0)
+        self._ivl_min.setSuffix(" d")
+        self._ivl_min.setSpecialValueText("Min")
+        self._ivl_min.editingFinished.connect(self._apply_filters)
+        ivl_row.addWidget(self._ivl_min)
+        ivl_row.addWidget(QLabel("\u2013"))
+        self._ivl_max = QSpinBox()
+        self._ivl_max.setRange(0, 99999)
+        self._ivl_max.setValue(0)
+        self._ivl_max.setSuffix(" d")
+        self._ivl_max.setSpecialValueText("Max")
+        self._ivl_max.editingFinished.connect(self._apply_filters)
+        ivl_row.addWidget(self._ivl_max)
+        ivl_row.addStretch()
+        form.addRow("Interval:", ivl_row)
+
+        # Lapses range
+        lapse_row = QHBoxLayout()
+        lapse_row.setSpacing(4)
+        self._lapse_min = QSpinBox()
+        self._lapse_min.setRange(0, 99999)
+        self._lapse_min.setValue(0)
+        self._lapse_min.setSpecialValueText("Min")
+        self._lapse_min.editingFinished.connect(self._apply_filters)
+        lapse_row.addWidget(self._lapse_min)
+        lapse_row.addWidget(QLabel("\u2013"))
+        self._lapse_max = QSpinBox()
+        self._lapse_max.setRange(0, 99999)
+        self._lapse_max.setValue(0)
+        self._lapse_max.setSpecialValueText("Max")
+        self._lapse_max.editingFinished.connect(self._apply_filters)
+        lapse_row.addWidget(self._lapse_max)
+        lapse_row.addStretch()
+        form.addRow("Lapses:", lapse_row)
+
+        # Reviews range
+        reps_row = QHBoxLayout()
+        reps_row.setSpacing(4)
+        self._reps_min = QSpinBox()
+        self._reps_min.setRange(0, 99999)
+        self._reps_min.setValue(0)
+        self._reps_min.setSpecialValueText("Min")
+        self._reps_min.editingFinished.connect(self._apply_filters)
+        reps_row.addWidget(self._reps_min)
+        reps_row.addWidget(QLabel("\u2013"))
+        self._reps_max = QSpinBox()
+        self._reps_max.setRange(0, 99999)
+        self._reps_max.setValue(0)
+        self._reps_max.setSpecialValueText("Max")
+        self._reps_max.editingFinished.connect(self._apply_filters)
+        reps_row.addWidget(self._reps_max)
+        reps_row.addStretch()
+        form.addRow("Reviews:", reps_row)
+
+        # Clear all button
+        clear_row = QHBoxLayout()
+        clear_row.addStretch()
+        clear_btn = QPushButton("Clear all filters")
+        clear_btn.setObjectName("clearFilters")
+        clear_btn.clicked.connect(self._clear_all_filters)
+        clear_row.addWidget(clear_btn)
+        form.addRow("", clear_row)
+
+        return panel
+
+    def _toggle_filter_panel(self) -> None:
+        vis = not self._filter_panel.isVisible()
+        self._filter_panel.setVisible(vis)
+
     def _on_chip_toggled(self, _checked: bool) -> None:
         self._apply_filters()
 
@@ -322,12 +534,99 @@ class CardViewerWindow(QMainWindow):
         self._tag_combo.addItem("All tags", userData="")
         for t in tags:
             self._tag_combo.addItem(t, userData=t)
-        # Restore previous selection if still present
         if prev_tag:
             idx = self._tag_combo.findData(prev_tag)
             if idx >= 0:
                 self._tag_combo.setCurrentIndex(idx)
         self._tag_combo.blockSignals(False)
+
+    def _on_flags_updated(self, flags: list) -> None:
+        """Called when the tray emits flag values present in the current deck."""
+        prev_flag = self._flag_combo.currentData()
+        self._flag_combo.blockSignals(True)
+        self._flag_combo.clear()
+        self._flag_combo.addItem("Any flag", userData=0)
+        for f in flags:
+            name = FLAG_NAMES.get(f, f"Flag {f}")
+            self._flag_combo.addItem(name, userData=f)
+        if prev_flag:
+            idx = self._flag_combo.findData(prev_flag)
+            if idx >= 0:
+                self._flag_combo.setCurrentIndex(idx)
+        self._flag_combo.blockSignals(False)
+
+    def _build_criteria(self) -> dict:
+        """Gather advanced filter criteria from the panel widgets."""
+        criteria: dict = {}
+        flag = self._flag_combo.currentData()
+        if flag:
+            criteria["flag"] = flag
+        # Ease (convert from % to permille): 0 means "no limit"
+        if self._ease_min.value() > 0:
+            criteria["min_ease"] = self._ease_min.value() * 10
+        if self._ease_max.value() > 0:
+            criteria["max_ease"] = self._ease_max.value() * 10
+        # Interval
+        if self._ivl_min.value() > 0:
+            criteria["min_ivl"] = self._ivl_min.value()
+        if self._ivl_max.value() > 0:
+            criteria["max_ivl"] = self._ivl_max.value()
+        # Lapses
+        if self._lapse_min.value() > 0:
+            criteria["min_lapses"] = self._lapse_min.value()
+        if self._lapse_max.value() > 0:
+            criteria["max_lapses"] = self._lapse_max.value()
+        # Reviews
+        if self._reps_min.value() > 0:
+            criteria["min_reps"] = self._reps_min.value()
+        if self._reps_max.value() > 0:
+            criteria["max_reps"] = self._reps_max.value()
+        return criteria
+
+    def _build_filter_summary(self, criteria: dict, tag_filter: str) -> str:
+        """Build a short summary string of active advanced filters."""
+        parts: list[str] = []
+        if tag_filter:
+            parts.append(f"Tag: {tag_filter}")
+        if criteria.get("flag"):
+            parts.append(f"Flag: {FLAG_NAMES.get(criteria['flag'], '?')}")
+        if criteria.get("min_ease") or criteria.get("max_ease"):
+            lo = criteria.get("min_ease", 0) // 10
+            hi = criteria.get("max_ease", 0) // 10
+            if lo and hi:
+                parts.append(f"Ease: {lo}\u2013{hi}%")
+            elif lo:
+                parts.append(f"Ease \u2265 {lo}%")
+            else:
+                parts.append(f"Ease \u2264 {hi}%")
+        if criteria.get("min_ivl") or criteria.get("max_ivl"):
+            lo = criteria.get("min_ivl", 0)
+            hi = criteria.get("max_ivl", 0)
+            if lo and hi:
+                parts.append(f"Ivl: {lo}\u2013{hi}d")
+            elif lo:
+                parts.append(f"Ivl \u2265 {lo}d")
+            else:
+                parts.append(f"Ivl \u2264 {hi}d")
+        if criteria.get("min_lapses") or criteria.get("max_lapses"):
+            lo = criteria.get("min_lapses", 0)
+            hi = criteria.get("max_lapses", 0)
+            if lo and hi:
+                parts.append(f"Lapses: {lo}\u2013{hi}")
+            elif lo:
+                parts.append(f"Lapses \u2265 {lo}")
+            else:
+                parts.append(f"Lapses \u2264 {hi}")
+        if criteria.get("min_reps") or criteria.get("max_reps"):
+            lo = criteria.get("min_reps", 0)
+            hi = criteria.get("max_reps", 0)
+            if lo and hi:
+                parts.append(f"Reps: {lo}\u2013{hi}")
+            elif lo:
+                parts.append(f"Reps \u2265 {lo}")
+            else:
+                parts.append(f"Reps \u2264 {hi}")
+        return "  \u00b7  ".join(parts)
 
     def _apply_filters(self) -> None:
         """Gather current filter/sort state and push to the tray."""
@@ -335,7 +634,69 @@ class CardViewerWindow(QMainWindow):
         active_chips = {k for k, btn in self._chip_buttons.items() if btn.isChecked()}
         tag_filter = self._tag_combo.currentData() or ""
         sort_key = self._sort_combo.currentData() or "deck"
-        self.tray.set_filters(search_text, active_chips, tag_filter, sort_key)
+        sort_reverse = not self._sort_ascending
+        criteria = self._build_criteria()
+
+        # Update summary label and filter button indicator
+        summary = self._build_filter_summary(criteria, tag_filter)
+        self._filter_summary.setText(summary)
+        has_advanced = bool(criteria or tag_filter)
+        self._filter_btn.setProperty("hasFilters", has_advanced)
+        self._filter_btn.style().unpolish(self._filter_btn)
+        self._filter_btn.style().polish(self._filter_btn)
+
+        self.tray.set_filters(search_text, active_chips, tag_filter, sort_key, sort_reverse, criteria)
+
+    def _clear_all_filters(self) -> None:
+        """Reset all filter controls to defaults."""
+        # Block signals during reset to avoid repeated re-renders
+        for btn in self._chip_buttons.values():
+            btn.blockSignals(True)
+            btn.setChecked(False)
+            btn.blockSignals(False)
+        self._tag_combo.blockSignals(True)
+        self._tag_combo.setCurrentIndex(0)
+        self._tag_combo.blockSignals(False)
+        self._flag_combo.blockSignals(True)
+        self._flag_combo.setCurrentIndex(0)
+        self._flag_combo.blockSignals(False)
+        for sb in (self._ease_min, self._ease_max, self._ivl_min, self._ivl_max,
+                    self._lapse_min, self._lapse_max, self._reps_min, self._reps_max):
+            sb.blockSignals(True)
+            sb.setValue(0)
+            sb.blockSignals(False)
+        self._card_search.clear()
+        self._sort_combo.blockSignals(True)
+        self._sort_combo.setCurrentIndex(0)
+        self._sort_combo.blockSignals(False)
+        self._sort_ascending = True
+        self._update_sort_dir_icon()
+        self._apply_filters()
+
+    def _on_sort_dir_clicked(self) -> None:
+        self._sort_ascending = not self._sort_ascending
+        self._update_sort_dir_icon()
+        self._apply_filters()
+
+    def _update_sort_dir_icon(self) -> None:
+        """Update the asc/desc toggle button icon."""
+        color = self.palette().windowText().color().name()
+        desc = not self._sort_ascending
+        # Down arrow = descending, Up arrow = ascending
+        arrow = (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" '
+            f'fill="none" stroke="{color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">'
+        )
+        if desc:
+            arrow += '<path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/>'
+            self._sort_dir_btn.setToolTip("Descending (click for ascending)")
+        else:
+            arrow += '<path d="M12 19V5"/><path d="M5 12l7-7 7 7"/>'
+            self._sort_dir_btn.setToolTip("Ascending (click for descending)")
+        arrow += '</svg>'
+        pm = QPixmap()
+        pm.loadFromData(arrow.encode("utf-8"))
+        self._sort_dir_btn.setIcon(QIcon(pm))
 
     def _on_mode_toggled(self, checked: bool) -> None:
         self._edit_mode = checked

@@ -211,7 +211,10 @@ def filter_cards_by_states(
 
 # ── Sorting ──
 
-SORT_KEYS = ["deck", "due", "state"]
+SORT_KEYS = [
+    "deck", "due", "state", "sort_field", "ease", "interval",
+    "lapses", "reps", "created", "modified",
+]
 
 
 def sort_cards(
@@ -219,26 +222,36 @@ def sort_cards(
     meta: dict[int, dict],
     today: int,
     sort_key: str,
+    reverse: bool = False,
 ) -> list[int]:
     """Return card_ids sorted according to sort_key.
 
-    'deck'  — original order (no-op).
-    'due'   — by due date ascending; new cards last.
-    'state' — by STATE_PRIORITY descending (most urgent first).
+    When reverse=False (default):
+      'deck'       — original order (no-op).
+      'due'        — soonest due first; new cards last.
+      'state'      — most urgent first.
+      'sort_field'  — alphabetical A→Z.
+      'ease'       — lowest first (struggling).
+      'interval'   — shortest first (youngest).
+      'lapses'     — most failed first.
+      'reps'       — most reviewed first.
+      'created'    — newest first.
+      'modified'   — recently changed first.
+
+    When reverse=True the order is flipped.
     """
     if sort_key == "deck" or sort_key not in SORT_KEYS:
-        return list(card_ids)
+        return list(reversed(card_ids)) if reverse else list(card_ids)
 
     if sort_key == "due":
         def due_key(cid: int) -> tuple[int, int]:
             m = meta.get(cid)
             if not m:
                 return (1, 0)
-            # New cards sort last (group 1), everything else group 0
             if m["queue"] == QUEUE_TYPE_NEW or m["type"] == CARD_TYPE_NEW:
                 return (1, cid)
             return (0, m["due"])
-        return sorted(card_ids, key=due_key)
+        return sorted(card_ids, key=due_key, reverse=reverse)
 
     if sort_key == "state":
         def state_key(cid: int) -> int:
@@ -247,6 +260,107 @@ def sort_cards(
                 return 0
             st = card_state_from_meta(m, today)
             return -STATE_PRIORITY.get(st, 0)
-        return sorted(card_ids, key=state_key)
+        return sorted(card_ids, key=state_key, reverse=reverse)
+
+    if sort_key == "sort_field":
+        def sfld_key(cid: int) -> str:
+            m = meta.get(cid)
+            return (m.get("sfld") or "").lower() if m else ""
+        return sorted(card_ids, key=sfld_key, reverse=reverse)
+
+    if sort_key == "ease":
+        def ease_key(cid: int) -> int:
+            m = meta.get(cid)
+            return m["factor"] if m else 0
+        return sorted(card_ids, key=ease_key, reverse=reverse)
+
+    if sort_key == "interval":
+        def ivl_key(cid: int) -> int:
+            m = meta.get(cid)
+            return m["ivl"] if m else 0
+        return sorted(card_ids, key=ivl_key, reverse=reverse)
+
+    if sort_key == "lapses":
+        def lapses_key(cid: int) -> int:
+            m = meta.get(cid)
+            return -(m["lapses"] if m else 0)
+        return sorted(card_ids, key=lapses_key, reverse=reverse)
+
+    if sort_key == "reps":
+        def reps_key(cid: int) -> int:
+            m = meta.get(cid)
+            return -(m["reps"] if m else 0)
+        return sorted(card_ids, key=reps_key, reverse=reverse)
+
+    if sort_key == "created":
+        return sorted(card_ids, reverse=not reverse)
+
+    if sort_key == "modified":
+        def mod_key(cid: int) -> int:
+            m = meta.get(cid)
+            return -(m["mod"] if m else 0)
+        return sorted(card_ids, key=mod_key, reverse=reverse)
 
     return list(card_ids)
+
+
+# ── Advanced criteria-based filtering ──
+
+def filter_cards_by_criteria(
+    meta: dict[int, dict],
+    criteria: dict,
+) -> set[int]:
+    """Filter cards by advanced criteria dict.
+
+    Supported keys (all optional):
+      flag       — int, exact flag match (1-7). 0 or absent = any flag.
+      min_ease   — int, minimum ease factor (permille, e.g. 1500 = 150%).
+      max_ease   — int, maximum ease factor.
+      min_ivl    — int, minimum interval in days.
+      max_ivl    — int, maximum interval in days.
+      min_lapses — int, minimum lapse count.
+      max_lapses — int, maximum lapse count.
+      min_reps   — int, minimum review count.
+      max_reps   — int, maximum review count.
+
+    Returns the set of matching card IDs.
+    """
+    if not criteria:
+        return set(meta.keys())
+
+    flag = criteria.get("flag", 0)
+    min_ease = criteria.get("min_ease")
+    max_ease = criteria.get("max_ease")
+    min_ivl = criteria.get("min_ivl")
+    max_ivl = criteria.get("max_ivl")
+    min_lapses = criteria.get("min_lapses")
+    max_lapses = criteria.get("max_lapses")
+    min_reps = criteria.get("min_reps")
+    max_reps = criteria.get("max_reps")
+
+    result: set[int] = set()
+    for cid, m in meta.items():
+        if flag and m.get("flags", 0) != flag:
+            continue
+        f = m.get("factor", 0)
+        if min_ease is not None and f < min_ease:
+            continue
+        if max_ease is not None and f > max_ease:
+            continue
+        iv = m.get("ivl", 0)
+        if min_ivl is not None and iv < min_ivl:
+            continue
+        if max_ivl is not None and iv > max_ivl:
+            continue
+        lp = m.get("lapses", 0)
+        if min_lapses is not None and lp < min_lapses:
+            continue
+        if max_lapses is not None and lp > max_lapses:
+            continue
+        rp = m.get("reps", 0)
+        if min_reps is not None and rp < min_reps:
+            continue
+        if max_reps is not None and rp > max_reps:
+            continue
+        result.add(cid)
+    return result

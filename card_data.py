@@ -10,7 +10,11 @@ from collections.abc import Sequence
 
 
 def get_cards_metadata(col, card_ids: Sequence[int]) -> dict[int, dict]:
-    """Bulk-fetch card metadata in one SQL query instead of N get_card() calls."""
+    """Bulk-fetch card metadata in one SQL query instead of N get_card() calls.
+
+    Returns a dict keyed by card ID with keys:
+      cid, type, queue, due, nid, mid, factor, ivl, lapses, reps, flags, mod, sfld
+    """
     if not card_ids:
         return {}
     # Process in chunks to avoid SQLite variable limit
@@ -20,7 +24,8 @@ def get_cards_metadata(col, card_ids: Sequence[int]) -> dict[int, dict]:
         chunk = card_ids[i : i + chunk_size]
         placeholders = ",".join("?" * len(chunk))
         rows = col.db.all(
-            f"SELECT c.id, c.type, c.queue, c.due, c.nid, n.mid "
+            f"SELECT c.id, c.type, c.queue, c.due, c.nid, n.mid, "
+            f"c.factor, c.ivl, c.lapses, c.reps, c.flags, c.mod, n.sfld "
             f"FROM cards c JOIN notes n ON c.nid = n.id "
             f"WHERE c.id IN ({placeholders})",
             *chunk,
@@ -29,8 +34,30 @@ def get_cards_metadata(col, card_ids: Sequence[int]) -> dict[int, dict]:
             result[r[0]] = {
                 "cid": r[0], "type": r[1], "queue": r[2],
                 "due": r[3], "nid": r[4], "mid": r[5],
+                "factor": r[6], "ivl": r[7], "lapses": r[8],
+                "reps": r[9], "flags": r[10], "mod": r[11],
+                "sfld": r[12],
             }
     return result
+
+
+def get_flags_for_cards(col, card_ids: Sequence[int]) -> list[int]:
+    """Return sorted distinct non-zero flag values present among the given cards."""
+    if not card_ids:
+        return []
+    flag_set: set[int] = set()
+    chunk_size = 500
+    for i in range(0, len(card_ids), chunk_size):
+        chunk = card_ids[i : i + chunk_size]
+        placeholders = ",".join("?" * len(chunk))
+        rows = col.db.all(
+            f"SELECT DISTINCT c.flags FROM cards c "
+            f"WHERE c.id IN ({placeholders}) AND c.flags != 0",
+            *chunk,
+        )
+        for (f,) in rows:
+            flag_set.add(f)
+    return sorted(flag_set)
 
 
 # ── Strip HTML tags for plain-text content search ──
