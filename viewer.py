@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from aqt import mw
+from aqt import mw, gui_hooks
 from aqt.qt import (
     QMainWindow,
     QWidget,
@@ -187,16 +187,20 @@ _SVG_EDIT = (
 )
 
 
-class CardViewerWindow(QMainWindow):
-    """Main viewer window with a deck dropdown, sidebar tree, and card tray."""
+class CardViewerWidget(QWidget):
+    """Core viewer widget: deck dropdown, sidebar tree, filter toolbar, and card tray.
 
-    _instance: CardViewerWindow | None = None
+    Used both inside a standalone QMainWindow (window mode) and embedded
+    directly into Anki's main window layout (embedded mode).
+    """
 
     def __init__(self, parent=None):
-        super().__init__(parent, Qt.WindowType.Window)
-        self.setWindowTitle("Card Viewer")
-        self.resize(1100, 750)
+        super().__init__(parent)
         self.setStyleSheet(_QSS)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
         # ── Left panel: dropdown + deck tree ──
         left_panel = QWidget()
@@ -350,7 +354,7 @@ class CardViewerWindow(QMainWindow):
         self._splitter.setStretchFactor(0, 0)
         self._splitter.setStretchFactor(1, 1)
 
-        self.setCentralWidget(self._splitter)
+        outer.addWidget(self._splitter)
 
         # Populate after the event loop starts
         QTimer.singleShot(0, self._populate_combo)
@@ -713,15 +717,94 @@ class CardViewerWindow(QMainWindow):
         self._mode_btn.setIcon(QIcon(pm))
         self._mode_btn.setToolTip("Edit mode" if self._edit_mode else "View mode")
 
+    def cleanup(self) -> None:
+        self.tray.cleanup()
+
+
+# ── Window mode ──
+
+
+class CardViewerWindow(QMainWindow):
+    """Standalone floating window wrapping CardViewerWidget."""
+
+    _instance: CardViewerWindow | None = None
+
+    def __init__(self, parent=None):
+        super().__init__(parent, Qt.WindowType.Window)
+        self.setWindowTitle("Card Viewer")
+        self.resize(1100, 750)
+        self._widget = CardViewerWidget(self)
+        self.setCentralWidget(self._widget)
+
     def closeEvent(self, a0):
         CardViewerWindow._instance = None
-        self.tray.cleanup()
+        self._widget.cleanup()
         super().closeEvent(a0)
 
 
-def open_card_viewer():
-    """Open the Card Viewer window (singleton)."""
+def open_card_viewer_window():
+    """Open the Card Viewer as a standalone window (singleton)."""
     if CardViewerWindow._instance is None:
         CardViewerWindow._instance = CardViewerWindow(mw)
     CardViewerWindow._instance.show()
     CardViewerWindow._instance.activateWindow()
+
+
+# ── Embedded mode ──
+
+
+class EmbeddedViewer:
+    """Manages showing/hiding the CardViewerWidget inside Anki's main window."""
+
+    _instance: EmbeddedViewer | None = None
+
+    def __init__(self) -> None:
+        self._widget: CardViewerWidget | None = None
+        self._active = False
+        gui_hooks.state_will_change.append(self._on_state_will_change)
+
+    def show(self) -> None:
+        if self._widget is None:
+            self._widget = CardViewerWidget(mw)
+            mw.mainLayout.addWidget(self._widget)
+
+        # Hide Anki's own content areas
+        mw.web.hide()
+        mw.bottomWeb.hide()
+        self._widget.show()
+        self._active = True
+
+        # Refresh content (deck list may have changed)
+        self._widget._populate_combo()
+
+    def hide(self) -> None:
+        if not self._active:
+            return
+        self._active = False
+        if self._widget is not None:
+            self._widget.hide()
+        # Restore Anki's own content areas
+        mw.web.show()
+        mw.bottomWeb.show()
+
+    def _on_state_will_change(self, new_state: str, old_state: str) -> None:
+        # When Anki transitions to any standard state, hide viewer
+        if self._active:
+            self.hide()
+
+
+def open_card_viewer_embedded():
+    """Show the viewer inside Anki's main window."""
+    if EmbeddedViewer._instance is None:
+        EmbeddedViewer._instance = EmbeddedViewer()
+    EmbeddedViewer._instance.show()
+
+
+def open_card_viewer():
+    """Open the Card Viewer using the configured mode."""
+    conf = mw.addonManager.getConfig(__name__.split(".")[0]) or {}
+    mode = conf.get("mode", "embedded")
+    if mode == "window":
+        open_card_viewer_window()
+    else:
+        open_card_viewer_embedded()
