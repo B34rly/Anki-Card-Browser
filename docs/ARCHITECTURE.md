@@ -56,7 +56,7 @@ The window wires signals between components: clicking a sidebar deck scrolls the
 - Populates from an Anki `DeckTreeNode`.
 - Emits `deck_selected(deck_id, full_name)` on click.
 - Supports text filtering (shows only matching branches).
-- Context menu (edit mode): "Add subdeck", "Add card".
+- Context menu (edit mode): "Add card", "Add child subdeck", "Add sibling subdeck" (sibling only for non-root decks).
 
 ### `decks.py` (data helpers)
 Stateless functions that query `mw.col.decks`:
@@ -98,8 +98,8 @@ Pure functions and constants for determining a card's visual state:
 
 ### `card_rendering.py` (HTML builders)
 Pure rendering functions (no Anki collection access except in `render_normal_card`):
-- `render_normal_card(col, cid)` — Full card frame HTML with answer, menu, badge.
-- `build_io_card_html(img_src, masks, card_ids, ...)` — Grouped IO card with SVG overlay.
+- **`render_normal_card(col, cid)`** — Full card frame HTML with answer, action buttons (edit pencil + 3-dot menu), badge.
+- **`build_io_card_html(img_src, masks, card_ids, ...)`** — Grouped IO card with SVG overlay and action buttons.
 - `build_svg_mask(mask, suspended)` — Single SVG shape element (rect/ellipse/polygon).
 - `format_deck_path(full_path)` — Truncated breadcrumb label for deck headers.
 
@@ -167,8 +167,10 @@ All JS→Python communication uses `pycmd('action:payload')`, dispatched by `Car
 | `lazy_load` | comma-separated cids | Renders cards and injects via `fillCards()` |
 | `review_due_deck` | deck_id | Opens Anki reviewer for that deck |
 | `force_review_deck` | deck_id | Sets all cards due today, starts review |
+| `edit_card` | cid | Opens Anki's browser filtered to that card |
 | `add_card` | deck_id | Opens Anki's Add Cards dialog |
-| `add_subdeck` | deck_id | Prompts for name, creates subdeck |
+| `add_subdeck` | deck_id | Prompts for name, creates child subdeck |
+| `add_sibling_subdeck` | deck_id | Prompts for name, creates sibling subdeck |
 | `suspend` / `unsuspend` | cid | Suspends/unsuspends single card |
 | `suspend_group` / `unsuspend_group` | cid,cid,... | Suspends/unsuspends IO group |
 | `review_now` / `review_now_group` | cid(s) | Sets card(s) due today |
@@ -257,8 +259,8 @@ Deck changed (new deck selected)
 ## View / Edit Modes
 
 The window has a toggle button (eye/pencil icon):
-- **View mode** (default): Card menus and the "+" add-card buttons are hidden via CSS (`body.view-mode`).
-- **Edit mode**: Card 3-dot menus appear on hover. Deck header right-click context menus are enabled. "+" buttons become visible.
+- **View mode** (default): The edit pencil button on cards and the "+" add buttons in headers are hidden via CSS (`body.view-mode`). Card 3-dot menus (suspend/review) are always visible.
+- **Edit mode**: Edit pencil buttons appear on cards (opens Anki's browser for that card). Deck header "+" buttons become visible with dropdown menus offering "Add card", "Add child subdeck", and "Add sibling subdeck".
 
 The mode state flows: `viewer._on_mode_toggled()` → sets `CardTray.edit_mode` (which calls `setEditMode()` in JS) and `DeckTree.edit_mode` (which gates the context menu).
 

@@ -10,6 +10,7 @@ function setEditMode(on) {
     _editMode = on;
     document.body.classList.toggle('view-mode', !on);
 }
+setEditMode(false);
 function toggleMenu(e, id) {
     e.stopPropagation();
     document.querySelectorAll('.card-menu.open').forEach(m => {
@@ -24,6 +25,10 @@ function cardAction(e, action, cid) {
     e.stopPropagation();
     document.querySelectorAll('.card-menu.open').forEach(m => m.classList.remove('open'));
     pycmd(action + ':' + cid);
+}
+function editCard(e, cid) {
+    e.stopPropagation();
+    pycmd('edit_card:' + cid);
 }
 function expandCard(el) {
     const overlay = document.getElementById('overlay');
@@ -59,28 +64,31 @@ function addCard(e, deckId) {
     pycmd('add_card:' + deckId);
 }
 
-/* ── Deck header context menu (right-click) ── */
-var _ctxMenu = null;
-function showDeckCtx(e, deckId) {
-    if (!_editMode) return;
-    e.preventDefault(); e.stopPropagation();
-    closeDeckCtx();
-    var menu = document.getElementById('ctx-' + deckId);
-    if (!menu) return;
-    menu.style.left = e.clientX + 'px';
-    menu.style.top = e.clientY + 'px';
-    menu.classList.add('open');
-    _ctxMenu = menu;
-}
-function closeDeckCtx() {
-    if (_ctxMenu) { _ctxMenu.classList.remove('open'); _ctxMenu = null; }
-}
-document.addEventListener('click', closeDeckCtx);
-function ctxAction(e, action, deckId) {
+/* ── Header plus-button dropdown ── */
+var _plusMenu = null;
+function togglePlusMenu(e, deckId) {
     e.stopPropagation();
-    closeDeckCtx();
+    closePlusMenu();
+    var menu = document.getElementById('plus-menu-' + deckId);
+    if (!menu) return;
+    var btn = e.currentTarget;
+    var rect = btn.getBoundingClientRect();
+    menu.style.left = rect.left + 'px';
+    menu.style.top = rect.bottom + 2 + 'px';
+    menu.classList.add('open');
+    _plusMenu = menu;
+}
+function closePlusMenu() {
+    if (_plusMenu) { _plusMenu.classList.remove('open'); _plusMenu = null; }
+}
+document.addEventListener('click', closePlusMenu);
+function plusAction(e, action, deckId) {
+    e.stopPropagation();
+    closePlusMenu();
     pycmd(action + ':' + deckId);
 }
+
+
 function toggleSection(deckId) {
     var body = document.getElementById('body-' + deckId);
     var arrow = document.getElementById('arrow-' + deckId);

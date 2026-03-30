@@ -158,6 +158,13 @@ class CardTray(QWidget):
             add.show()
             return
 
+        if action == "edit_card":
+            from aqt import dialogs
+            browser = dialogs.open("Browser", mw)
+            if browser:
+                browser.search_for(f"cid:{payload}")
+            return
+
         if action == "add_subdeck":
             deck_id = int(payload)
             deck = col.decks.get(DeckId(deck_id))
@@ -166,6 +173,30 @@ class CardTray(QWidget):
             parent_name = deck["name"]
             name, ok = QInputDialog.getText(
                 self, "New Subdeck", f"Subdeck name under {parent_name}:"
+            )
+            if ok and name.strip():
+                full_name = f"{parent_name}::{name.strip()}"
+                col.decks.id(full_name)
+                if self._tree_root is not None:
+                    from .decks import find_deck_node
+                    new_root = find_deck_node(self._tree_root.deck_id)
+                    if new_root:
+                        self.set_deck_tree(new_root, self._tree_name)
+                self.subdeck_created.emit()
+            return
+
+        if action == "add_sibling_subdeck":
+            deck_id = int(payload)
+            deck = col.decks.get(DeckId(deck_id))
+            if not deck:
+                return
+            deck_name = deck["name"]
+            parts = deck_name.split("::")
+            if len(parts) < 2:
+                return  # root deck has no parent to add a sibling under
+            parent_name = "::".join(parts[:-1])
+            name, ok = QInputDialog.getText(
+                self, "New Sibling Subdeck", f"Subdeck name under {parent_name}:"
             )
             if ok and name.strip():
                 full_name = f"{parent_name}::{name.strip()}"
@@ -306,19 +337,22 @@ class CardTray(QWidget):
             child_path = f"{root_name}::{child.name}"
             child_sections += self._build_section(col, child, full_path=child_path, depth=0)
 
-        body = ""
+        root_plus_menu = (
+            f'<div class="plus-menu" id="plus-menu-{root_node.deck_id}">'
+            f'<button onclick="plusAction(event,\'add_card\',{root_node.deck_id})">Add card\u2026</button>'
+            f'<button onclick="plusAction(event,\'add_subdeck\',{root_node.deck_id})">Add child subdeck\u2026</button>'
+            f'</div>'
+        )
+        root_header = (
+            f'<div class="root-header">'
+            f'<button class="header-plus-btn" onclick="togglePlusMenu(event,{root_node.deck_id})" title="Add\u2026">+</button>'
+            f'{root_plus_menu}'
+            f'</div>'
+        )
+
+        body = root_header
         if root_cards:
-            body += (
-                f'<div class="deck-cards">{root_cards}'
-                f'<div class="add-card-btn" onclick="addCard(event,{root_node.deck_id})" title="Add card to this deck">+</div>'
-                f'</div>'
-            )
-        else:
-            body += (
-                f'<div class="deck-cards">'
-                f'<div class="add-card-btn" onclick="addCard(event,{root_node.deck_id})" title="Add card to this deck">+</div>'
-                f'</div>'
-            )
+            body += f'<div class="deck-cards">{root_cards}</div>'
         body += child_sections
 
         self._render_page(body)
@@ -346,27 +380,30 @@ class CardTray(QWidget):
         name_html = format_deck_path(full_path)
         d = min(depth, 4)
 
+        plus_menu = (
+            f'<div class="plus-menu" id="plus-menu-{deck_id}">'
+            f'<button onclick="plusAction(event,\'add_card\',{deck_id})">Add card\u2026</button>'
+            f'<button onclick="plusAction(event,\'add_subdeck\',{deck_id})">Add child subdeck\u2026</button>'
+            f'<button onclick="plusAction(event,\'add_sibling_subdeck\',{deck_id})">Add sibling subdeck\u2026</button>'
+            f'</div>'
+        )
+
         return (
             f'<div class="deck-section" data-deck-id="{deck_id}">'
-            f'<div class="deck-header depth-{d}" onclick="toggleSection({deck_id})"'
-            f' oncontextmenu="showDeckCtx(event,{deck_id})">'
+            f'<div class="deck-header depth-{d}" onclick="toggleSection({deck_id})">'
             f'<span class="{arrow_cls}" id="arrow-{deck_id}">\u25bc</span>'
             f'<span class="deck-name">{name_html}</span>'
             f'<span class="deck-info">'
+            f'<button class="header-plus-btn" onclick="togglePlusMenu(event,{deck_id})" title="Add\u2026">+</button>'
+            f'{plus_menu}'
             f'<span class="card-count">{len(all_cids)} cards</span>'
             f'<button class="deck-btn" onclick="deckAction(event,\'review_due_deck\',{deck_id})">Review due</button>'
             f'<button class="deck-btn" onclick="deckAction(event,\'force_review_deck\',{deck_id})">Force review all</button>'
             f'</span>'
             f'</div>'
             f'<div class="deck-body{" collapsed" if collapsed else ""}" id="body-{deck_id}"{body_style}>'
-            f'<div class="deck-cards">{cards_html}'
-            f'<div class="add-card-btn" onclick="addCard(event,{deck_id})" title="Add card to this deck">+</div>'
-            f'</div>'
+            f'<div class="deck-cards">{cards_html}</div>'
             f'{children_html}'
-            f'</div>'
-            f'<div class="deck-ctx-menu" id="ctx-{deck_id}">'
-            f'<button onclick="ctxAction(event,\'add_subdeck\',{deck_id})">Add subdeck\u2026</button>'
-            f'<button onclick="ctxAction(event,\'add_card\',{deck_id})">Add card\u2026</button>'
             f'</div>'
             f'</div>'
         )

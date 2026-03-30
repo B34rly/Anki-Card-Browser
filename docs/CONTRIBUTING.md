@@ -51,11 +51,15 @@ Key CSS classes:
 - `.card-state-badge` — Positioned in top-left corner, shows icon + countdown text.
 - `.deck-header` — Sticky section headers with collapse arrow and action buttons.
 - `.deck-body` — Collapsible container wrapping a deck's cards and child decks.
+- `.card-actions` — Container for edit pencil and 3-dot menu (top-right of card frame).
+- `.card-menu-btn` — 3-dot menu trigger (always visible).
+- `.edit-card-btn` — Pencil icon to edit card (hidden in view mode).
 - `.card-menu` — Per-card dropdown (suspend, review now).
-- `.deck-ctx-menu` — Per-deck right-click menu (add subdeck, add card).
+- `.header-plus-btn` — "+" button in deck headers for add actions (hidden in view mode).
+- `.plus-menu` — Per-deck dropdown from "+" button (add card, add child subdeck, add sibling subdeck).
 - `#overlay` — Full-screen card preview with blur backdrop.
-- `.add-card-btn` — Dashed "+" button for adding cards (hidden in view mode).
-- `body.view-mode` — Applied when in view mode; hides edit-only elements.
+- `.add-card-btn` — Dashed "+" button for adding cards (removed; replaced by `.header-plus-btn`).
+- `body.view-mode` — Applied when in view mode; hides edit-only elements (edit pencil, header "+" buttons).
 
 ### `tray_js.py` — JavaScript
 
@@ -63,7 +67,9 @@ Contains a single `TRAY_JS` string with all client-side logic. Key systems:
 
 **Edit mode**: `setEditMode(on)` toggles the `view-mode` class on `<body>`.
 
-**Card menus**: `toggleMenu(e, id)` opens/closes per-card 3-dot menus. Only one menu open at a time. `cardAction(e, action, cid)` sends actions to Python via `pycmd`.
+**Card menus**: `toggleMenu(e, id)` opens/closes per-card 3-dot menus. Only one menu open at a time. `cardAction(e, action, cid)` sends actions to Python via `pycmd`. `editCard(e, cid)` opens the card in Anki's browser.
+
+**Header plus-menu**: `togglePlusMenu(e, deckId)` opens a dropdown from deck header "+" buttons with options to add card, add child subdeck, or add sibling subdeck.
 
 **Overlay**: `expandCard(el)` clones the card's `.card-content` into the overlay and animates it in. `closeOverlay()` animates out with a 280ms delay. Escape key closes it.
 
@@ -106,9 +112,9 @@ Review, due 15+ days    → "review-later"  → Green 30% (dotted)
 
 ### `card_rendering.py` — HTML Builders
 
-**`render_normal_card(col, cid)`**: Fetches a single card, gets its answer HTML, and wraps it in a `.card-frame` div with a state badge, 3-dot menu, and click handler.
+**`render_normal_card(col, cid)`**: Fetches a single card, gets its answer HTML, and wraps it in a `.card-frame` div with a state badge, action buttons (edit pencil + 3-dot menu), and click handler.
 
-**`build_io_card_html(...)`**: Builds a grouped IO card: an `<img>` with SVG overlays for each mask shape. Suspended ordinals get gray masks; active ones get red.
+**`build_io_card_html(...)`**: Builds a grouped IO card: an `<img>` with SVG overlays for each mask shape. Includes action buttons. Suspended ordinals get gray masks; active ones get red.
 
 **`build_svg_mask(mask, suspended)`**: Converts a mask dict into an SVG shape element (`<rect>`, `<ellipse>`, or `<polygon>`).
 
@@ -147,7 +153,7 @@ QLineEdit.textChanged          →  DeckTree.filter()
 Uses `QTreeWidget` with items storing `deck_id` and `full_name` in `UserRole` data. Supports:
 - Click → emits `deck_selected` signal
 - Search → `filter(text)` hides non-matching branches
-- Right-click (edit mode) → context menu for adding subdecks/cards
+- Right-click (edit mode) → context menu: "Add card", "Add child subdeck", "Add sibling subdeck"
 - `highlight_deck(id)` → programmatically selects and scrolls to a deck (called by scroll-spy)
 
 ### `decks.py` — Deck Queries

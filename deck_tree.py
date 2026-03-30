@@ -98,26 +98,38 @@ class DeckTree(QWidget):
         from anki.decks import DeckId
 
         menu = QMenu(self)
-        add_subdeck_action = menu.addAction("Add subdeck\u2026")
         add_card_action = menu.addAction("Add card\u2026")
+        add_child_action = menu.addAction("Add child subdeck\u2026")
+        # Sibling only makes sense for non-root decks (name contains "::")
+        add_sibling_action = None
+        if "::" in full_name:
+            add_sibling_action = menu.addAction("Add sibling subdeck\u2026")
         chosen = menu.exec(self._tree.viewport().mapToGlobal(pos))
 
         col = mw.col
         if col is None:
             return
 
-        if chosen == add_subdeck_action:
+        if chosen == add_card_action:
+            col.decks.set_current(DeckId(int(deck_id)))
+            from aqt.addcards import AddCards
+            add = AddCards(mw)
+            add.show()
+        elif chosen == add_child_action:
             name, ok = QInputDialog.getText(
                 self, "New Subdeck", f"Subdeck name under {full_name}:"
             )
             if ok and name.strip():
                 col.decks.id(f"{full_name}::{name.strip()}")
                 self.subdeck_created.emit()
-        elif chosen == add_card_action:
-            col.decks.set_current(DeckId(int(deck_id)))
-            from aqt.addcards import AddCards
-            add = AddCards(mw)
-            add.show()
+        elif add_sibling_action and chosen == add_sibling_action:
+            parent_name = "::".join(full_name.split("::")[:-1])
+            name, ok = QInputDialog.getText(
+                self, "New Sibling Subdeck", f"Subdeck name under {parent_name}:"
+            )
+            if ok and name.strip():
+                col.decks.id(f"{parent_name}::{name.strip()}")
+                self.subdeck_created.emit()
 
     def highlight_deck(self, deck_id: int) -> None:
         """Select the tree item for *deck_id* without emitting signals."""

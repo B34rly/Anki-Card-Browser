@@ -75,7 +75,10 @@ def build_io_card_html(
     return (
         f'<div class="{cls}" onclick="expandCard(this)">'
         f'  {badge}'
-        f'  <button class="card-menu-btn" onclick="toggleMenu(event,\'{menu_id}\')">&#8942;</button>'
+        f'  <div class="card-actions">'
+        f'    <button class="edit-card-btn" onclick="editCard(event,{card_ids[0]})" title="Edit card">&#9998;</button>'
+        f'    <button class="card-menu-btn" onclick="toggleMenu(event,\'{menu_id}\')">&#8942;</button>'
+        f'  </div>'
         f'  <div class="card-menu" id="menu-{menu_id}">'
         f'    <button onclick="cardAction(event,\'{toggle_action}\',\'{cids_str}\')">{toggle_label}</button>'
         f'    <button onclick="cardAction(event,\'review_now_group\',\'{cids_str}\')">Review all now</button>'
@@ -119,7 +122,10 @@ def render_normal_card(col, cid: int) -> str:
     return (
         f'<div class="{cls}" onclick="expandCard(this)">'
         f'  {badge}'
-        f'  <button class="card-menu-btn" onclick="toggleMenu(event,{cid})">&#8942;</button>'
+        f'  <div class="card-actions">'
+        f'    <button class="edit-card-btn" onclick="editCard(event,{cid})" title="Edit card">&#9998;</button>'
+        f'    <button class="card-menu-btn" onclick="toggleMenu(event,{cid})">&#8942;</button>'
+        f'  </div>'
         f'  <div class="card-menu" id="menu-{cid}">'
         f'    <button onclick="cardAction(event,\'{toggle_action}\',{cid})">{toggle_label}</button>'
         f'    <button onclick="cardAction(event,\'review_now\',{cid})">Review now</button>'

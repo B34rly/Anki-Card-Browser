@@ -53,17 +53,25 @@ body {
     margin-top: 8px;
 }
 
-/* ── 3-dot menu ── */
-.card-menu-btn {
+/* ── Card action buttons (top-right) ── */
+.card-actions {
     position: absolute; top: 6px; right: 8px;
+    display: flex; align-items: center; gap: 2px;
+}
+.card-menu-btn {
     background: none; border: none; cursor: pointer;
     font-size: 18px; color: GrayText; padding: 2px 6px;
     border-radius: 4px; line-height: 1;
-    opacity: 0;
+    transition: background 0.15s ease, color 0.1s ease;
+}
+.card-menu-btn:hover { background: color-mix(in srgb, CanvasText 10%, Canvas); color: CanvasText; }
+.edit-card-btn {
+    background: none; border: none; cursor: pointer;
+    font-size: 14px; color: GrayText; padding: 2px 6px;
+    border-radius: 4px; line-height: 1;
     transition: opacity 0.15s ease, background 0.15s ease, color 0.1s ease;
 }
-.card-frame:hover .card-menu-btn { opacity: 1; }
-.card-menu-btn:hover { background: color-mix(in srgb, CanvasText 10%, Canvas); color: CanvasText; }
+.edit-card-btn:hover { background: color-mix(in srgb, CanvasText 10%, Canvas); color: CanvasText; }
 
 /* ── Card dropdown menu ── */
 .card-menu {
@@ -178,50 +186,58 @@ body.overlay-open { overflow: hidden; padding-right: var(--scrollbar-w, 0px); }
 }
 .deck-cards:empty { display: none; }
 
-/* ── Add-card button ── */
-.add-card-btn {
-    border: 2px dashed color-mix(in srgb, CanvasText 15%, Canvas);
-    border-radius: 8px;
-    padding: 24px 16px;
-    margin-bottom: 12px;
-    break-inside: avoid;
+/* ── Header plus-button ── */
+.root-header {
+    display: flex; align-items: center; justify-content: flex-end;
+    padding: 4px 14px 0;
+    position: relative;
+}
+.header-plus-btn {
+    border: 1px solid color-mix(in srgb, CanvasText 18%, Canvas);
+    border-radius: 4px;
+    background: transparent;
+    color: color-mix(in srgb, CanvasText 50%, Canvas);
+    font-size: 18px; line-height: 1;
+    width: 26px; height: 26px;
     cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 28px; color: color-mix(in srgb, CanvasText 25%, Canvas);
+    display: inline-flex; align-items: center; justify-content: center;
     transition: border-color 0.15s, color 0.15s, background 0.15s,
                opacity 0.25s ease, visibility 0.25s ease;
     user-select: none;
+    position: relative;
 }
-.add-card-btn:hover {
+.header-plus-btn:hover {
     border-color: color-mix(in srgb, CanvasText 40%, Canvas);
-    color: color-mix(in srgb, CanvasText 50%, Canvas);
-    background: color-mix(in srgb, CanvasText 3%, Canvas);
+    color: CanvasText;
+    background: color-mix(in srgb, CanvasText 5%, Canvas);
 }
 
-/* ── Deck header context menu ── */
-.deck-ctx-menu {
+/* ── Plus-button dropdown menu ── */
+.plus-menu {
     display: none; position: fixed;
     background: Canvas; color: CanvasText;
     border: 1px solid color-mix(in srgb, CanvasText 18%, Canvas); border-radius: 6px;
     box-shadow: 0 6px 20px rgba(0,0,0,0.18); z-index: 300;
-    min-width: 170px; overflow: hidden;
+    min-width: 180px; overflow: hidden;
     padding: 4px 0;
 }
-.deck-ctx-menu.open { display: block; }
-.deck-ctx-menu button {
+.plus-menu.open { display: block; }
+.plus-menu button {
     display: block; width: 100%; padding: 7px 14px;
     border: none; background: none; text-align: left;
     cursor: pointer; font-size: 13px; color: CanvasText;
     transition: background 0.1s ease;
 }
-.deck-ctx-menu button:hover { background: color-mix(in srgb, CanvasText 8%, Canvas); }
+.plus-menu button:hover { background: color-mix(in srgb, CanvasText 8%, Canvas); }
+
+
 
 /* ── View mode: hide edit-only elements ── */
-body.view-mode .add-card-btn {
+body.view-mode .header-plus-btn {
     opacity: 0; visibility: hidden;
     pointer-events: none;
 }
-body.view-mode .card-menu-btn {
+body.view-mode .edit-card-btn {
     opacity: 0; visibility: hidden;
     pointer-events: none;
 }
