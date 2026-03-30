@@ -1,0 +1,159 @@
+"""Card state classification, countdown formatting, and theme color helpers.
+
+Determines the visual state of a card (new, learn, review-due, etc.)
+based on its queue/type/due metadata, and provides the corresponding
+badge HTML and CSS color variables.
+"""
+from __future__ import annotations
+
+import time
+from html import escape as _esc
+
+from anki.consts import (
+    CARD_TYPE_NEW,
+    CARD_TYPE_LRN,
+    CARD_TYPE_RELEARNING,
+    QUEUE_TYPE_NEW,
+    QUEUE_TYPE_LRN,
+    QUEUE_TYPE_REV,
+    QUEUE_TYPE_DAY_LEARN_RELEARN,
+    QUEUE_TYPE_SUSPENDED,
+    QUEUE_TYPE_MANUALLY_BURIED,
+    QUEUE_TYPE_SIBLING_BURIED,
+)
+
+# ── SVG icons for the state badge ──
+
+STATE_ICONS = {
+    "new": (
+        '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">'
+        '<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 '
+        '3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>'
+    ),
+    "learn": (
+        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2.5" stroke-linecap="round" '
+        'stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>'
+    ),
+    "review": (
+        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2.5" stroke-linecap="round" '
+        'stroke-linejoin="round"><circle cx="12" cy="12" r="10"/>'
+        '<path d="M12 6v6l4 2"/></svg>'
+    ),
+}
+
+STATE_PRIORITY = {
+    "learn": 6, "review-due": 5, "review-soon": 4,
+    "review-mid": 3, "review-later": 2, "new": 1, "": 0,
+}
+
+
+def card_state_from_meta(meta: dict, today: int = 0) -> str:
+    """Return the card's visual state string.
+
+    Review cards are split into sub-states based on days until due:
+      'review-due'   — due today or overdue
+      'review-soon'  — due in 1-3 days
+      'review-mid'   — due in 4-14 days
+      'review-later'  — due in 15+ days
+    """
+    q = meta["queue"]
+    if q == QUEUE_TYPE_SUSPENDED or q in (QUEUE_TYPE_MANUALLY_BURIED, QUEUE_TYPE_SIBLING_BURIED):
+        return ""
+    if q == QUEUE_TYPE_NEW or meta["type"] == CARD_TYPE_NEW:
+        return "new"
+    if q in (QUEUE_TYPE_LRN, QUEUE_TYPE_DAY_LEARN_RELEARN) or meta["type"] in (CARD_TYPE_LRN, CARD_TYPE_RELEARNING):
+        return "learn"
+    # Review card — determine urgency sub-state
+    days = meta["due"] - today if today else 0
+    if days <= 0:
+        return "review-due"
+    if days <= 3:
+        return "review-soon"
+    if days <= 14:
+        return "review-mid"
+    return "review-later"
+
+
+def card_countdown_from_meta(meta: dict, today: int) -> str:
+    """Return a succinct countdown string from a metadata row dict."""
+    q = meta["queue"]
+    if q in (QUEUE_TYPE_NEW, QUEUE_TYPE_SUSPENDED, QUEUE_TYPE_MANUALLY_BURIED, QUEUE_TYPE_SIBLING_BURIED):
+        return ""
+    if q == QUEUE_TYPE_LRN:
+        secs = int(meta["due"] - time.time())
+        return _fmt_seconds(secs) if secs > 0 else ""
+    if q in (QUEUE_TYPE_REV, QUEUE_TYPE_DAY_LEARN_RELEARN):
+        days = meta["due"] - today
+        if days <= 0:
+            return "Due"
+        return _fmt_days(days)
+    return ""
+
+
+def _fmt_seconds(secs: int) -> str:
+    if secs < 60:
+        return f"{secs}s"
+    if secs < 3600:
+        return f"{secs // 60}m"
+    if secs < 86400:
+        return f"{secs // 3600}h"
+    return _fmt_days(secs // 86400)
+
+
+def _fmt_days(days: int) -> str:
+    if days <= 0:
+        return ""
+    if days == 1:
+        return "1 day"
+    if days < 30:
+        return f"{days} days"
+    if days < 365:
+        mo = days // 30
+        return f"{mo} mo"
+    yr = days // 365
+    return f"{yr} yr"
+
+
+def build_state_badge(state: str, countdown: str) -> str:
+    """Build the HTML for the state badge shown in the card corner."""
+    if not state:
+        return ""
+    # Review sub-states all share the 'review' icon
+    icon_key = "review" if state.startswith("review") else state
+    icon = STATE_ICONS.get(icon_key, "")
+    text = f'<span class="card-state-text">{_esc(countdown)}</span>' if countdown else ""
+    return f'<span class="card-state-badge"><span class="card-state-icon">{icon}</span>{text}</span>'
+
+
+def get_state_colors() -> dict[str, str]:
+    """Return a dict of CSS variable values for state colors, including bg variants."""
+    try:
+        from aqt import colors as c
+        from aqt.theme import theme_manager as tm
+        new_hex = tm.var(c.STATE_NEW)
+        learn_hex = tm.var(c.STATE_LEARN)
+        review_hex = tm.var(c.STATE_REVIEW)
+    except Exception:
+        new_hex, learn_hex, review_hex = "#3b82f6", "#dc2626", "#16a34a"
+
+    def _hex_to_rgba(h: str, alpha: float) -> str:
+        h = h.lstrip("#")
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return f"rgba({r},{g},{b},{alpha})"
+
+    return {
+        "--state-new-color": new_hex,
+        "--state-learn-color": learn_hex,
+        "--state-review-color": review_hex,
+        "--state-review-70": _hex_to_rgba(review_hex, 0.70),
+        "--state-review-50": _hex_to_rgba(review_hex, 0.50),
+        "--state-review-30": _hex_to_rgba(review_hex, 0.30),
+        "--state-new-bg": _hex_to_rgba(new_hex, 0.12),
+        "--state-learn-bg": _hex_to_rgba(learn_hex, 0.12),
+        "--state-review-bg": _hex_to_rgba(review_hex, 0.12),
+        "--state-review-soon-bg": _hex_to_rgba(review_hex, 0.08),
+        "--state-review-mid-bg": _hex_to_rgba(review_hex, 0.06),
+        "--state-review-later-bg": _hex_to_rgba(review_hex, 0.04),
+    }
