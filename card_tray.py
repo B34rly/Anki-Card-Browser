@@ -14,6 +14,7 @@ from aqt.qt import (
     QLabel,
     QSizePolicy,
     QInputDialog,
+    QMessageBox,
     pyqtSignal,
 )
 
@@ -209,6 +210,36 @@ class CardTray(QWidget):
                 self.subdeck_created.emit()
             return
 
+        if action == "delete_deck":
+            deck_id = int(payload)
+            deck = col.decks.get(DeckId(deck_id))
+            if not deck:
+                return
+            deck_name = deck["name"]
+            own_cids = col.decks.cids(DeckId(deck_id), children=False)
+            children = col.decks.children(DeckId(deck_id))
+            if own_cids or children:
+                QMessageBox.warning(
+                    self, "Cannot Delete",
+                    f'The deck "{deck_name}" is not empty.\n\n'
+                    "Move or delete all cards and child subdecks first.",
+                )
+            else:
+                confirm = QMessageBox.question(
+                    self, "Delete Deck",
+                    f'Are you sure you want to delete "{deck_name}"?',
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                )
+                if confirm == QMessageBox.StandardButton.Yes:
+                    col.decks.remove([DeckId(deck_id)])
+                    if self._tree_root is not None:
+                        from .decks import find_deck_node
+                        new_root = find_deck_node(self._tree_root.deck_id)
+                        if new_root:
+                            self.set_deck_tree(new_root, self._tree_name)
+                    self.subdeck_created.emit()
+            return
+
         if action in ("suspend", "unsuspend", "review_now"):
             cid = CardId(int(payload))
             if action == "suspend":
@@ -225,6 +256,18 @@ class CardTray(QWidget):
                 col.sched.unsuspend_cards(cids)
             elif action == "review_now_group":
                 col.sched.set_due_date(cids, "0")
+        elif action == "delete_card":
+            cids = [CardId(int(c)) for c in payload.split(",") if c]
+            count = len(cids)
+            label = f"{count} cards" if count > 1 else "this card"
+            confirm = QMessageBox.question(
+                self, "Delete Card",
+                f"Are you sure you want to delete {label}?\n\nThis cannot be undone.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if confirm != QMessageBox.StandardButton.Yes:
+                return
+            col.remove_cards_and_orphaned_notes(cids)
 
         if self._tree_root is not None:
             self.set_deck_tree(self._tree_root, self._tree_name)
@@ -385,6 +428,8 @@ class CardTray(QWidget):
             f'<button onclick="plusAction(event,\'add_card\',{deck_id})">Add card\u2026</button>'
             f'<button onclick="plusAction(event,\'add_subdeck\',{deck_id})">Add child subdeck\u2026</button>'
             f'<button onclick="plusAction(event,\'add_sibling_subdeck\',{deck_id})">Add sibling subdeck\u2026</button>'
+            f'<hr class="plus-menu-sep">'
+            f'<button class="plus-menu-danger" onclick="plusAction(event,\'delete_deck\',{deck_id})">Delete deck\u2026</button>'
             f'</div>'
         )
 
@@ -530,9 +575,14 @@ class CardTray(QWidget):
                 mo = ACTIVE_ORDINAL_RE.search(q_html)
                 if mo and is_susp:
                     suspended_ords.add(mo.group(1))
+            try:
+                io_tags = first_card.note().tags
+            except Exception:
+                io_tags = []
             return build_io_card_html(
                 img_src, masks, group_cids, suspended_ords, all_susp,
                 state=group_state, countdown=group_countdown,
+                tags=io_tags,
             )
         else:
             return render_normal_card(col, group_cids[0])

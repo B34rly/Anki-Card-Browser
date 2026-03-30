@@ -21,7 +21,7 @@ body {
     border: 1px solid color-mix(in srgb, CanvasText 14%, Canvas);
     border-radius: 8px;
     padding: 14px;
-    padding-top: 34px;
+    padding-top: 0;
     margin-bottom: 12px;
     break-inside: avoid;
     cursor: pointer;
@@ -43,6 +43,36 @@ body {
 }
 .card-frame.suspended { opacity: 0.45; }
 
+/* ── Card top bar (flex row: badge | tags | actions) ── */
+.card-top-bar {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 8px;
+    min-height: 28px;
+}
+
+/* ── Card tag strip ── */
+.card-tag-strip {
+    flex: 1; min-width: 0;
+    display: flex; gap: 4px; align-items: center;
+    overflow-x: auto; overflow-y: hidden;
+    scrollbar-width: none;
+    -webkit-mask-image: linear-gradient(to right, black 0, black calc(100% - 18px), transparent 100%);
+    mask-image: linear-gradient(to right, black 0, black calc(100% - 18px), transparent 100%);
+    white-space: nowrap;
+    pointer-events: none;
+}
+.card-tag-strip::-webkit-scrollbar { display: none; }
+.card-tag {
+    display: inline-block;
+    font-size: 10px; line-height: 1;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: color-mix(in srgb, CanvasText 8%, Canvas);
+    color: color-mix(in srgb, CanvasText 60%, Canvas);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
 /* ── IO grouped card ── */
 .io-container { position: relative; display: inline-block; max-width: 100%; overflow: hidden; line-height: 0; }
 .io-container img { display: block; max-width: 100%; height: auto; }
@@ -53,10 +83,11 @@ body {
     margin-top: 8px;
 }
 
-/* ── Card action buttons (top-right) ── */
+/* ── Card action buttons ── */
 .card-actions {
-    position: absolute; top: 6px; right: 8px;
     display: flex; align-items: center; gap: 2px;
+    flex-shrink: 0;
+    margin-left: auto;
 }
 .card-menu-btn {
     background: none; border: none; cursor: pointer;
@@ -229,6 +260,12 @@ body.overlay-open { overflow: hidden; padding-right: var(--scrollbar-w, 0px); }
     transition: background 0.1s ease;
 }
 .plus-menu button:hover { background: color-mix(in srgb, CanvasText 8%, Canvas); }
+.plus-menu-sep {
+    border: none; border-top: 1px solid color-mix(in srgb, CanvasText 12%, Canvas);
+    margin: 4px 0;
+}
+.plus-menu-danger { color: #c0392b !important; }
+.plus-menu-danger:hover { background: color-mix(in srgb, #c0392b 10%, Canvas) !important; }
 
 
 
@@ -241,6 +278,15 @@ body.view-mode .edit-card-btn {
     opacity: 0; visibility: hidden;
     pointer-events: none;
 }
+body.view-mode .edit-only {
+    display: none;
+}
+.card-menu-sep {
+    border: none; border-top: 1px solid color-mix(in srgb, CanvasText 12%, Canvas);
+    margin: 4px 0;
+}
+.card-menu-danger { color: #c0392b !important; }
+.card-menu-danger:hover { background: color-mix(in srgb, #c0392b 10%, Canvas) !important; }
 
 /* ── Card state indicators ── */
 .card-frame.state-new          { border-bottom: 3px solid var(--state-new-color); }
@@ -251,11 +297,12 @@ body.view-mode .edit-card-btn {
 .card-frame.state-review-later { border-bottom: 2px dotted var(--state-review-30); }
 
 .card-state-badge {
-    position: absolute; top: 8px; left: 10px;
     display: flex; align-items: center; gap: 4px;
     font-size: 11px; line-height: 1;
     border-radius: 4px; padding: 2px 6px;
-    pointer-events: none; z-index: 5;
+    pointer-events: none;
+    flex-shrink: 0;
+    white-space: nowrap;
 }
 .state-new .card-state-badge {
     color: var(--state-new-color);

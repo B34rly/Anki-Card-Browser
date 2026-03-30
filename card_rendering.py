@@ -10,6 +10,14 @@ from html import escape as _esc
 from .card_state import build_state_badge
 
 
+def build_tag_strip(tags: list[str]) -> str:
+    """Build an inline scrollable tag strip for the card top bar."""
+    if not tags:
+        return ""
+    pills = " ".join(f'<span class="card-tag">{_esc(t)}</span>' for t in tags)
+    return f'<div class="card-tag-strip">{pills}</div>'
+
+
 def build_svg_mask(mask: dict, suspended: bool = False) -> str:
     """Build an SVG element for a single mask shape."""
     shape = mask.get("shape", "rect")
@@ -52,6 +60,7 @@ def build_io_card_html(
     all_suspended: bool,
     state: str = "",
     countdown: str = "",
+    tags: list[str] | None = None,
 ) -> str:
     """Build a single grouped IO card with image + SVG mask overlay."""
     cls_parts = ["card-frame"]
@@ -71,17 +80,23 @@ def build_io_card_html(
     )
 
     badge = build_state_badge(state, countdown)
+    tag_strip = build_tag_strip(tags or [])
 
     return (
         f'<div class="{cls}" onclick="expandCard(this)">'
-        f'  {badge}'
-        f'  <div class="card-actions">'
-        f'    <button class="edit-card-btn" onclick="editCard(event,{card_ids[0]})" title="Edit card">&#9998;</button>'
-        f'    <button class="card-menu-btn" onclick="toggleMenu(event,\'{menu_id}\')">&#8942;</button>'
+        f'  <div class="card-top-bar">'
+        f'    {badge}'
+        f'    {tag_strip}'
+        f'    <div class="card-actions">'
+        f'      <button class="edit-card-btn" onclick="editCard(event,{card_ids[0]})" title="Edit card">&#9998;</button>'
+        f'      <button class="card-menu-btn" onclick="toggleMenu(event,\'{menu_id}\')">&#8942;</button>'
+        f'    </div>'
         f'  </div>'
         f'  <div class="card-menu" id="menu-{menu_id}">'
         f'    <button onclick="cardAction(event,\'{toggle_action}\',\'{cids_str}\')">{toggle_label}</button>'
         f'    <button onclick="cardAction(event,\'review_now_group\',\'{cids_str}\')">Review all now</button>'
+        f'    <hr class="card-menu-sep">'
+        f'    <button class="card-menu-danger edit-only" onclick="deleteCard(event,\'{cids_str}\')">Delete cards</button>'
         f'  </div>'
         f'  <div class="card-content">'
         f'    <div class="io-container">'
@@ -119,16 +134,26 @@ def render_normal_card(col, cid: int) -> str:
     toggle_action = "unsuspend" if suspended else "suspend"
     answer_html = card.answer()
     badge = build_state_badge(state, countdown)
+    try:
+        tags = card.note().tags
+    except Exception:
+        tags = []
+    tag_strip = build_tag_strip(tags)
     return (
         f'<div class="{cls}" onclick="expandCard(this)">'
-        f'  {badge}'
-        f'  <div class="card-actions">'
-        f'    <button class="edit-card-btn" onclick="editCard(event,{cid})" title="Edit card">&#9998;</button>'
-        f'    <button class="card-menu-btn" onclick="toggleMenu(event,{cid})">&#8942;</button>'
+        f'  <div class="card-top-bar">'
+        f'    {badge}'
+        f'    {tag_strip}'
+        f'    <div class="card-actions">'
+        f'      <button class="edit-card-btn" onclick="editCard(event,{cid})" title="Edit card">&#9998;</button>'
+        f'      <button class="card-menu-btn" onclick="toggleMenu(event,{cid})">&#8942;</button>'
+        f'    </div>'
         f'  </div>'
         f'  <div class="card-menu" id="menu-{cid}">'
         f'    <button onclick="cardAction(event,\'{toggle_action}\',{cid})">{toggle_label}</button>'
         f'    <button onclick="cardAction(event,\'review_now\',{cid})">Review now</button>'
+        f'    <hr class="card-menu-sep">'
+        f'    <button class="card-menu-danger edit-only" onclick="deleteCard(event,{cid})">Delete card</button>'
         f'  </div>'
         f'  <div class="card-content">{answer_html}</div>'
         f'</div>'

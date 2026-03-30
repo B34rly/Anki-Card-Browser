@@ -7,6 +7,7 @@ from aqt.qt import (
     QTreeWidgetItem,
     QMenu,
     QInputDialog,
+    QMessageBox,
     Qt,
     pyqtSignal,
 )
@@ -104,6 +105,8 @@ class DeckTree(QWidget):
         add_sibling_action = None
         if "::" in full_name:
             add_sibling_action = menu.addAction("Add sibling subdeck\u2026")
+        menu.addSeparator()
+        delete_action = menu.addAction("Delete deck\u2026")
         chosen = menu.exec(self._tree.viewport().mapToGlobal(pos))
 
         col = mw.col
@@ -130,6 +133,25 @@ class DeckTree(QWidget):
             if ok and name.strip():
                 col.decks.id(f"{parent_name}::{name.strip()}")
                 self.subdeck_created.emit()
+        elif chosen == delete_action:
+            own_cids = col.decks.cids(DeckId(int(deck_id)), children=False)
+            deck = col.decks.get(DeckId(int(deck_id)))
+            children = col.decks.children(DeckId(int(deck_id))) if deck else []
+            if own_cids or children:
+                QMessageBox.warning(
+                    self, "Cannot Delete",
+                    f"The deck \"{full_name}\" is not empty.\n\n"
+                    "Move or delete all cards and child subdecks first.",
+                )
+            else:
+                confirm = QMessageBox.question(
+                    self, "Delete Deck",
+                    f"Are you sure you want to delete \"{full_name}\"?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                )
+                if confirm == QMessageBox.StandardButton.Yes:
+                    col.decks.remove([DeckId(int(deck_id))])
+                    self.subdeck_created.emit()
 
     def highlight_deck(self, deck_id: int) -> None:
         """Select the tree item for *deck_id* without emitting signals."""

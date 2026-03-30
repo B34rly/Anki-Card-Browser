@@ -30,6 +30,11 @@ function editCard(e, cid) {
     e.stopPropagation();
     pycmd('edit_card:' + cid);
 }
+function deleteCard(e, cid) {
+    e.stopPropagation();
+    document.querySelectorAll('.card-menu.open').forEach(m => m.classList.remove('open'));
+    pycmd('delete_card:' + cid);
+}
 function expandCard(el) {
     const overlay = document.getElementById('overlay');
     const inner = document.getElementById('overlay-card-content');
