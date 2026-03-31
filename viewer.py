@@ -187,8 +187,8 @@ _SVG_EDIT = (
 )
 
 
-class CardViewerWidget(QWidget):
-    """Core viewer widget: deck dropdown, sidebar tree, filter toolbar, and card tray.
+class CardBrowserWidget(QWidget):
+    """Core browser widget: deck dropdown, sidebar tree, filter toolbar, and card tray.
 
     Used both inside a standalone QMainWindow (window mode) and embedded
     directly into Anki's main window layout (embedded mode).
@@ -724,48 +724,48 @@ class CardViewerWidget(QWidget):
 # ── Window mode ──
 
 
-class CardViewerWindow(QMainWindow):
-    """Standalone floating window wrapping CardViewerWidget."""
+class CardBrowserWindow(QMainWindow):
+    """Standalone floating window wrapping CardBrowserWidget."""
 
-    _instance: CardViewerWindow | None = None
+    _instance: CardBrowserWindow | None = None
 
     def __init__(self, parent=None):
         super().__init__(parent, Qt.WindowType.Window)
-        self.setWindowTitle("Card Viewer")
+        self.setWindowTitle("Card Browser")
         self.resize(1100, 750)
-        self._widget = CardViewerWidget(self)
+        self._widget = CardBrowserWidget(self)
         self.setCentralWidget(self._widget)
 
     def closeEvent(self, a0):
-        CardViewerWindow._instance = None
+        CardBrowserWindow._instance = None
         self._widget.cleanup()
         super().closeEvent(a0)
 
 
-def open_card_viewer_window():
-    """Open the Card Viewer as a standalone window (singleton)."""
-    if CardViewerWindow._instance is None:
-        CardViewerWindow._instance = CardViewerWindow(mw)
-    CardViewerWindow._instance.show()
-    CardViewerWindow._instance.activateWindow()
+def open_card_browser_window():
+    """Open the Card Browser as a standalone window (singleton)."""
+    if CardBrowserWindow._instance is None:
+        CardBrowserWindow._instance = CardBrowserWindow(mw)
+    CardBrowserWindow._instance.show()
+    CardBrowserWindow._instance.activateWindow()
 
 
 # ── Embedded mode ──
 
 
-class EmbeddedViewer:
-    """Manages showing/hiding the CardViewerWidget inside Anki's main window."""
+class EmbeddedBrowser:
+    """Manages showing/hiding the CardBrowserWidget inside Anki's main window."""
 
-    _instance: EmbeddedViewer | None = None
+    _instance: EmbeddedBrowser | None = None
 
     def __init__(self) -> None:
-        self._widget: CardViewerWidget | None = None
+        self._widget: CardBrowserWidget | None = None
         self._active = False
         gui_hooks.state_will_change.append(self._on_state_will_change)
 
     def show(self) -> None:
         if self._widget is None:
-            self._widget = CardViewerWidget(mw)
+            self._widget = CardBrowserWidget(mw)
             mw.mainLayout.addWidget(self._widget)
 
         # Hide Anki's own content areas
@@ -793,18 +793,18 @@ class EmbeddedViewer:
             self.hide()
 
 
-def open_card_viewer_embedded():
-    """Show the viewer inside Anki's main window."""
-    if EmbeddedViewer._instance is None:
-        EmbeddedViewer._instance = EmbeddedViewer()
-    EmbeddedViewer._instance.show()
+def open_card_browser_embedded():
+    """Show the browser inside Anki's main window."""
+    if EmbeddedBrowser._instance is None:
+        EmbeddedBrowser._instance = EmbeddedBrowser()
+    EmbeddedBrowser._instance.show()
 
 
-def open_card_viewer():
-    """Open the Card Viewer using the configured mode."""
+def open_card_browser():
+    """Open the Card Browser using the configured mode."""
     conf = mw.addonManager.getConfig(__name__.split(".")[0]) or {}
     mode = conf.get("mode", "embedded")
     if mode == "window":
-        open_card_viewer_window()
+        open_card_browser_window()
     else:
-        open_card_viewer_embedded()
+        open_card_browser_embedded()
