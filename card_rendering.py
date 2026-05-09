@@ -83,7 +83,7 @@ def build_io_card_html(
     tag_strip = build_tag_strip(tags or [])
 
     return (
-        f'<div class="{cls}" onclick="expandCard(this)">'
+        f'<div class="{cls}" data-cid="{menu_id}" onclick="expandCard(this)">'
         f'  <div class="card-top-bar">'
         f'    {badge}'
         f'    {tag_strip}'
@@ -140,7 +140,7 @@ def render_normal_card(col, cid: int) -> str:
         tags = []
     tag_strip = build_tag_strip(tags)
     return (
-        f'<div class="{cls}" onclick="expandCard(this)">'
+        f'<div class="{cls}" data-cid="{cid}" onclick="expandCard(this)">'
         f'  <div class="card-top-bar">'
         f'    {badge}'
         f'    {tag_strip}'

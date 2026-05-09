@@ -18,6 +18,7 @@ from aqt.qt import (
     QIcon,
     QPixmap,
     QTimer,
+    QSizePolicy,
     Qt,
 )
 
@@ -230,6 +231,13 @@ class CardBrowserWidget(QWidget):
         self._mode_btn.toggled.connect(self._on_mode_toggled)
         self._update_mode_icon()
         search_row.addWidget(self._mode_btn, 0)
+
+        self._refresh_btn = QToolButton()
+        self._refresh_btn.setToolTip("Refresh")
+        self._refresh_btn.clicked.connect(self._refresh_current_deck)
+        self._update_refresh_icon()
+        search_row.addWidget(self._refresh_btn, 0)
+
         left_layout.addLayout(search_row)
 
         self._deck_tree = DeckTree()
@@ -358,6 +366,9 @@ class CardBrowserWidget(QWidget):
 
         # Populate after the event loop starts
         QTimer.singleShot(0, self._populate_combo)
+
+        # Auto-refresh on card changes
+        self._hook()
 
     # ── Dropdown ──
 
@@ -718,7 +729,98 @@ class CardBrowserWidget(QWidget):
         self._mode_btn.setToolTip("Edit mode" if self._edit_mode else "View mode")
 
     def cleanup(self) -> None:
+        self._unhook()
         self.tray.cleanup()
+
+    # ── Auto-refresh hooks ──
+
+    _suppress_next_op: bool = False
+    _needs_refresh_on_show: bool = False
+
+    def _hook(self) -> None:
+        gui_hooks.operation_did_execute.append(self._on_operation_did_execute)
+        self.tray.card_action_handled.connect(self._on_card_action_handled)
+
+    def _unhook(self) -> None:
+        try:
+            gui_hooks.operation_did_execute.remove(self._on_operation_did_execute)
+        except ValueError:
+            pass
+
+    def _on_card_action_handled(self) -> None:
+        """Tray already did a targeted refresh — suppress the next op hook."""
+        self._suppress_next_op = True
+
+    def _on_operation_did_execute(self, changes, handler) -> None:
+        """React to collection changes with minimal refresh."""
+        # Only care about card/note/deck changes
+        dominated = changes.card or changes.note or changes.deck or changes.study_queues
+        if not dominated:
+            return
+
+        # If we're not visible, defer a full refresh for when we become visible
+        if not self.isVisible():
+            self._needs_refresh_on_show = True
+            return
+
+        # If our own bridge command already handled this, skip
+        if self._suppress_next_op:
+            self._suppress_next_op = False
+            return
+
+        # Deck structure changed → full refresh (unavoidable)
+        if changes.deck:
+            self.tray._pending_edit_cid = None
+            self.tray._pending_add_deck_id = None
+            self._refresh_current_deck()
+            return
+
+        col = mw.col
+        if col is None:
+            return
+
+        # If we know a specific card was being edited, refresh just that card
+        if self.tray._pending_edit_cid is not None:
+            cid = self.tray._pending_edit_cid
+            self.tray._pending_edit_cid = None
+            self.tray._targeted_refresh_card(col, cid)
+            return
+
+        # If we know a card was being added to a specific deck, refresh that section
+        if self.tray._pending_add_deck_id is not None:
+            deck_id = self.tray._pending_add_deck_id
+            self.tray._pending_add_deck_id = None
+            if self.tray._tree_root is not None:
+                self.tray.refresh_section(deck_id)
+                self.tray._update_title(col)
+            else:
+                self._refresh_current_deck()
+            return
+
+        # Unknown external change → just update header counts (no card content flash)
+        # User can hit manual refresh if they need to see content changes
+        if self.tray._tree_root is not None:
+            self.tray._refresh_all_header_counts(col)
+        # (If no tree, nothing visible to update)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if self._needs_refresh_on_show:
+            self._needs_refresh_on_show = False
+            self._refresh_current_deck()
+
+    def _update_refresh_icon(self) -> None:
+        color = self.palette().windowText().color().name()
+        svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" '
+            f'fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            '<path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>'
+            '<path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>'
+            '</svg>'
+        )
+        pm = QPixmap()
+        pm.loadFromData(svg.encode("utf-8"))
+        self._refresh_btn.setIcon(QIcon(pm))
 
 
 # ── Window mode ──

@@ -62,12 +62,19 @@ class CardTray(QWidget):
     # Emits sorted list of flag ints for the current deck
     flags_updated = pyqtSignal(list)
 
+    # Emits after bridge cmd handles a card action (so viewer suppresses op hook)
+    card_action_handled = pyqtSignal()
+
     def __init__(self, title: str = "", parent=None):
         super().__init__(parent)
 
         self._edit_mode: bool = False
         self._collapsed_decks: set[int] = set()
         self._io_group_map: dict[int, list[int]] = {}  # lead_cid → [group cids]
+
+        # Context tracking for deferred targeted refresh
+        self._pending_edit_cid: int | None = None
+        self._pending_add_deck_id: int | None = None
 
         # Filter/sort state (set from viewer toolbar)
         self._search_text: str = ""
@@ -153,6 +160,7 @@ class CardTray(QWidget):
 
         if action == "add_card":
             deck_id = int(payload)
+            self._pending_add_deck_id = deck_id
             col.decks.set_current(DeckId(deck_id))
             from aqt.addcards import AddCards
             add = AddCards(mw)
@@ -160,6 +168,7 @@ class CardTray(QWidget):
             return
 
         if action == "edit_card":
+            self._pending_edit_cid = int(payload)
             from aqt import dialogs
             browser = dialogs.open("Browser", mw)
             if browser:
@@ -248,6 +257,9 @@ class CardTray(QWidget):
                 col.sched.unsuspend_cards([cid])
             elif action == "review_now":
                 col.sched.set_due_date([cid], "0")
+            self._targeted_refresh_card(col, int(payload))
+            self.card_action_handled.emit()
+            return
         elif action in ("suspend_group", "unsuspend_group", "review_now_group"):
             cids = [CardId(int(c)) for c in payload.split(",") if c]
             if action == "suspend_group":
@@ -256,10 +268,20 @@ class CardTray(QWidget):
                 col.sched.unsuspend_cards(cids)
             elif action == "review_now_group":
                 col.sched.set_due_date(cids, "0")
+            # Find the lead cid for this IO group
+            lead_cid = int(payload.split(",")[0]) if "," in payload else int(payload)
+            self._targeted_refresh_card(col, lead_cid, is_group=True)
+            self.card_action_handled.emit()
+            return
         elif action == "delete_card":
             cids = [CardId(int(c)) for c in payload.split(",") if c]
             count = len(cids)
             label = f"{count} cards" if count > 1 else "this card"
+            # Determine deck before deletion for header count update
+            try:
+                deck_id = col.get_card(cids[0]).did
+            except Exception:
+                deck_id = None
             confirm = QMessageBox.question(
                 self, "Delete Card",
                 f"Are you sure you want to delete {label}?\n\nThis cannot be undone.",
@@ -268,6 +290,15 @@ class CardTray(QWidget):
             if confirm != QMessageBox.StandardButton.Yes:
                 return
             col.remove_cards_and_orphaned_notes(cids)
+            # Remove card(s) from DOM
+            lead_cid = int(payload.split(",")[0]) if "," in payload else int(payload)
+            self._web.eval(f"removeCard({lead_cid})")
+            # Update section header counts and title
+            if deck_id is not None:
+                self._refresh_header_counts(col, deck_id)
+            self._update_title(col)
+            self.card_action_handled.emit()
+            return
 
         if self._tree_root is not None:
             self.set_deck_tree(self._tree_root, self._tree_name)
@@ -643,6 +674,9 @@ class CardTray(QWidget):
             f"<script>{TRAY_JS}</script>",
             context=self,
         )
+        # Re-apply edit mode after full page rebuild
+        if self._edit_mode:
+            self._web.eval("setEditMode(true)")
 
     def _on_lazy_load(self, col, payload: str) -> None:
         """Handle lazy_load bridge command: render requested cards and inject."""
@@ -676,3 +710,159 @@ class CardTray(QWidget):
 
     def cleanup(self) -> None:
         self._web.cleanup()
+
+    # ── Targeted refresh ──
+
+    def _targeted_refresh_card(self, col, cid: int, is_group: bool = False) -> None:
+        """Re-render a single card (or IO group) in-place without full page reload.
+
+        If active filters are set, falls back to refreshing the whole deck section
+        (still no full-page reload). Otherwise, replaces just the card element.
+        """
+        has_filters = bool(self._search_text or self._active_chips or self._tag_filter or self._criteria)
+
+        # Determine which deck section this card belongs to
+        try:
+            card = col.get_card(CardId(cid))
+            deck_id = card.did
+        except Exception:
+            # Card might not exist (edge case); fall back to full refresh
+            if self._tree_root is not None:
+                self.set_deck_tree(self._tree_root, self._tree_name)
+            return
+
+        if has_filters:
+            # Filters are active — the card might now be excluded, so rebuild the section
+            if self._tree_root is not None:
+                if deck_id == self._tree_root.deck_id:
+                    # Card is in root deck directly; must do full re-render
+                    self._render_deck_tree(emit_tags=False)
+                else:
+                    self.refresh_section(deck_id)
+                self._update_title(col)
+            return
+
+        # No active filters: surgically replace just this card in the DOM
+        if is_group and cid in self._io_group_map:
+            html = self._build_io_group(col, self._io_group_map[cid])
+        else:
+            html = render_normal_card(col, cid)
+
+        escaped = json.dumps(html)
+        self._web.eval(f"replaceCard({cid}, {escaped})")
+
+        # Update section header counts
+        self._refresh_header_counts(col, deck_id)
+        self._update_title(col)
+
+    def _refresh_header_counts(self, col, deck_id: int) -> None:
+        """Update the header count badges for a section and its ancestors."""
+        if self._tree_root is None:
+            return
+        # Update the section itself (if it's a child section)
+        ctx = self._find_node_context(deck_id)
+        if ctx is not None:
+            all_cids = col.decks.cids(DeckId(deck_id), children=True)
+            sc = self._state_counts_html(col, all_cids)
+            self._web.eval(f"updateHeaderCounts({deck_id}, {json.dumps(sc)})")
+        # Update ancestor header counts
+        for anc_id in self._ancestor_deck_ids(deck_id):
+            anc_cids = col.decks.cids(DeckId(anc_id), children=True)
+            sc = self._state_counts_html(col, anc_cids)
+            self._web.eval(f"updateHeaderCounts({anc_id}, {json.dumps(sc)})")
+
+    def _update_title(self, col) -> None:
+        """Recalculate and update the header title with current card counts."""
+        if self._tree_root is None:
+            return
+        all_cids = col.decks.cids(DeckId(self._tree_root.deck_id), children=True)
+        has_filters = bool(self._search_text or self._active_chips or self._tag_filter or self._criteria)
+        if has_filters:
+            filtered_total = self._apply_filters(col, all_cids)
+            self.title = f"{self._tree_name}  ({len(filtered_total)} / {len(all_cids)} cards)"
+        else:
+            self.title = f"{self._tree_name}  ({len(all_cids)} cards)"
+
+    def _refresh_all_header_counts(self, col) -> None:
+        """Update all section header counts without touching card content."""
+        if self._tree_root is None:
+            return
+        self._update_section_counts(col, self._tree_root)
+        self._update_title(col)
+
+    def _update_section_counts(self, col, node) -> None:
+        """Recursively update header counts for all sections."""
+        for child in node.children:
+            deck_id = child.deck_id
+            all_cids = col.decks.cids(DeckId(deck_id), children=True)
+            sc = self._state_counts_html(col, all_cids)
+            self._web.eval(f"updateHeaderCounts({deck_id}, {json.dumps(sc)})")
+            self._update_section_counts(col, child)
+
+    def _find_node_context(
+        self, deck_id: int, node=None, parent_path: str = "", depth: int = 0
+    ) -> tuple | None:
+        """Find (node, full_path, depth) for *deck_id* within the current tree."""
+        if node is None:
+            node = self._tree_root
+            if node is None:
+                return None
+            parent_path = self._tree_name
+            # Check root's direct children (root itself is depth -1, children start at 0)
+            for child in node.children:
+                child_path = f"{parent_path}::{child.name}"
+                if child.deck_id == deck_id:
+                    return (child, child_path, 0)
+                found = self._find_node_context(deck_id, child, child_path, 1)
+                if found is not None:
+                    return found
+            return None
+        for child in node.children:
+            child_path = f"{parent_path}::{child.name}"
+            if child.deck_id == deck_id:
+                return (child, child_path, depth)
+            found = self._find_node_context(deck_id, child, child_path, depth + 1)
+            if found is not None:
+                return found
+        return None
+
+    def _ancestor_deck_ids(self, deck_id: int) -> list[int]:
+        """Return deck IDs from the target up to (but not including) the tree root."""
+        col = mw.col
+        if col is None:
+            return []
+        deck = col.decks.get(DeckId(deck_id))
+        if not deck:
+            return []
+        parts = deck["name"].split("::")
+        ancestors: list[int] = []
+        for i in range(len(parts) - 1, 0, -1):
+            parent_name = "::".join(parts[:i])
+            pid = col.decks.id_for_name(parent_name)
+            if pid is not None:
+                ancestors.append(pid)
+        return ancestors
+
+    def refresh_section(self, deck_id: int) -> None:
+        """Rebuild one deck section in-place and update ancestor header counts."""
+        col = mw.col
+        if col is None or self._tree_root is None:
+            return
+
+        ctx = self._find_node_context(deck_id)
+        if ctx is not None:
+            node, full_path, depth = ctx
+            html = self._build_section(col, node, full_path, depth)
+            if html:
+                escaped = json.dumps(html)
+                self._web.eval(f"replaceSection({deck_id}, {escaped})")
+            # Update header counts for the rebuilt section itself
+            all_cids = col.decks.cids(DeckId(deck_id), children=True)
+            sc = self._state_counts_html(col, all_cids)
+            self._web.eval(f"updateHeaderCounts({deck_id}, {json.dumps(sc)})")
+
+        # Update ancestor header counts (they include children totals)
+        for anc_id in self._ancestor_deck_ids(deck_id):
+            anc_cids = col.decks.cids(DeckId(anc_id), children=True)
+            sc = self._state_counts_html(col, anc_cids)
+            self._web.eval(f"updateHeaderCounts({anc_id}, {json.dumps(sc)})")

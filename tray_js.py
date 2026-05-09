@@ -212,4 +212,44 @@ function initLazy() {
     });
 }
 initLazy();
+
+/* ── Targeted section refresh ── */
+function replaceSection(deckId, html) {
+    var old = document.querySelector('[data-deck-id="' + deckId + '"]');
+    if (!old) return;
+    var tmp = document.createElement('div');
+    tmp.innerHTML = html.trim();
+    var neo = tmp.firstElementChild;
+    if (!neo) return;
+    old.parentNode.replaceChild(neo, old);
+    /* Re-observe new placeholders inside the replaced section */
+    neo.querySelectorAll('.card-placeholder[data-lazy]').forEach(function(el) {
+        _lazyObserver.observe(el);
+    });
+}
+function updateHeaderCounts(deckId, countsHtml) {
+    var sec = document.querySelector('[data-deck-id="' + deckId + '"]');
+    if (!sec) return;
+    var hdr = sec.querySelector(':scope > .deck-header');
+    if (!hdr) return;
+    var cc = hdr.querySelector('.card-count');
+    if (cc) cc.outerHTML = countsHtml;
+}
+
+/* ── Single-card targeted refresh ── */
+function replaceCard(cid, html) {
+    var old = document.querySelector('[data-cid="' + cid + '"]')
+           || document.querySelector('[data-lazy="' + cid + '"]');
+    if (!old) return;
+    var tmp = document.createElement('div');
+    tmp.innerHTML = html.trim();
+    var neo = tmp.firstElementChild;
+    if (!neo) return;
+    old.parentNode.replaceChild(neo, old);
+}
+function removeCard(cid) {
+    var old = document.querySelector('[data-cid="' + cid + '"]')
+           || document.querySelector('[data-lazy="' + cid + '"]');
+    if (old) old.remove();
+}
 """
