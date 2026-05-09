@@ -22,14 +22,10 @@ body {
     border-radius: 8px;
     padding: 14px;
     padding-top: 0;
-    margin-bottom: 12px;
-    break-inside: avoid;
     cursor: pointer;
     overflow: hidden;
     transition: box-shadow 0.2s ease, transform 0.2s ease, opacity 0.15s ease;
     transform-origin: center center;
-    content-visibility: auto;
-    contain-intrinsic-size: auto 200px;
 }
 .card-frame img { max-width: 100%; height: auto; display: block; }
 .card-frame:hover {
@@ -220,7 +216,11 @@ body.overlay-open { overflow: hidden; padding-right: var(--scrollbar-w, 0px); }
     overflow: hidden;
 }
 .deck-cards {
-    column-width: 320px; column-gap: 14px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    grid-auto-rows: 10px;
+    grid-auto-flow: dense;
+    gap: 14px;
     padding: 14px;
 }
 .deck-cards:empty { display: none; }
