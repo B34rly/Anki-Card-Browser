@@ -294,6 +294,85 @@ body.view-mode .edit-only {
     margin: 4px 0;
 }
 .card-menu-danger { color: #c0392b !important; }
+
+/* ── Note group blocks (notes mode) ── */
+.note-group { cursor: pointer; }
+.note-card-count {
+    color: GrayText; font-size: 12px; white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.note-fields-table {
+    width: 100%; border-collapse: collapse;
+    font-size: 13px; line-height: 1.5;
+}
+.note-field-row { border-bottom: 1px solid color-mix(in srgb, CanvasText 6%, Canvas); }
+.note-field-row:last-child { border-bottom: none; }
+.note-field-name {
+    width: 1%; white-space: nowrap;
+    padding: 4px 10px 4px 0; vertical-align: top;
+    font-size: 11px; font-style: italic;
+    color: GrayText;
+}
+.note-field-value {
+    padding: 4px 0; vertical-align: top;
+    max-height: 120px; overflow: hidden;
+    position: relative;
+}
+.note-field-value img { max-width: 100%; max-height: 100px; height: auto; }
+.note-field-empty .note-field-value { opacity: 0.4; }
+.note-field-placeholder {
+    font-size: 11px; font-style: italic; color: GrayText;
+}
+
+/* Cloze marker highlighting */
+.cloze-marker {
+    background: color-mix(in srgb, Highlight 15%, Canvas);
+    border-radius: 3px; padding: 0 2px;
+}
+.cloze-num {
+    font-size: 10px; font-weight: 600;
+    color: Highlight; opacity: 0.7;
+}
+.cloze-hint {
+    font-size: 10px; font-style: italic;
+    color: GrayText;
+}
+
+/* Show cards toggle */
+.note-cards-toggle {
+    padding: 4px 8px; font-size: 11px; color: Highlight;
+    cursor: pointer; user-select: none;
+    transition: color 0.15s;
+}
+.note-cards-toggle:hover { color: CanvasText; }
+.note-cards-toggle.expanded { }
+
+/* Individual cards within a note group */
+.note-cards-body {
+    display: none; padding: 4px 8px 8px;
+    border-top: 1px solid color-mix(in srgb, CanvasText 6%, Canvas);
+}
+.note-cards-body.open { display: block; }
+.note-cards-body .card-frame {
+    margin-bottom: 8px; border-color: color-mix(in srgb, CanvasText 10%, Canvas);
+}
+
+/* Overlay note-specific styling */
+.overlay-note-header {
+    margin-bottom: 16px; padding-bottom: 12px;
+    border-bottom: 1px solid color-mix(in srgb, CanvasText 12%, Canvas);
+}
+.overlay-card-select {
+    margin: 12px 0; padding: 6px 10px;
+    border: 1px solid color-mix(in srgb, CanvasText 18%, Canvas);
+    border-radius: 6px; background: Canvas; color: CanvasText;
+    font-size: 13px; min-width: 200px;
+}
+.overlay-card-preview {
+    margin-top: 12px; padding-top: 12px;
+    border-top: 1px solid color-mix(in srgb, CanvasText 8%, Canvas);
+}
 .card-menu-danger:hover { background: color-mix(in srgb, #c0392b 10%, Canvas) !important; }
 
 /* ── Card state indicators ── */

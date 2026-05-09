@@ -50,6 +50,76 @@ function expandCard(el) {
         });
     });
 }
+
+/* ── Note group: expand overlay with fields + card template dropdown ── */
+function expandNoteGroup(el) {
+    var overlay = document.getElementById('overlay');
+    var inner = document.getElementById('overlay-card-content');
+    /* Fields table (full size in overlay) */
+    var fieldsHtml = '<div class="overlay-note-header">'
+        + el.querySelector('.card-content').innerHTML
+        + '</div>';
+    /* Card template dropdown */
+    var namesAttr = el.getAttribute('data-card-names') || '';
+    var entries = namesAttr.split('|').filter(function(x){ return x; });
+    if (entries.length > 0) {
+        fieldsHtml += '<select class="overlay-card-select" onchange="onNoteCardSelect(this)">';
+        fieldsHtml += '<option value="">Select a card to preview\u2026</option>';
+        entries.forEach(function(entry) {
+            var sep = entry.indexOf(':');
+            var cid = entry.substring(0, sep);
+            var name = entry.substring(sep + 1);
+            fieldsHtml += '<option value="' + cid + '">' + name + '</option>';
+        });
+        fieldsHtml += '</select>';
+        fieldsHtml += '<div class="overlay-card-preview" id="overlay-card-preview"></div>';
+    }
+    inner.innerHTML = fieldsHtml;
+    overlay.classList.add('open');
+    var scrollbarW = window.innerWidth - document.documentElement.clientWidth;
+    document.documentElement.style.setProperty('--scrollbar-w', scrollbarW + 'px');
+    document.body.classList.add('overlay-open');
+    requestAnimationFrame(function() {
+        requestAnimationFrame(function() {
+            overlay.classList.add('visible');
+        });
+    });
+}
+function onNoteCardSelect(sel) {
+    var cid = sel.value;
+    if (!cid) {
+        document.getElementById('overlay-card-preview').innerHTML = '';
+        return;
+    }
+    pycmd('preview_card:' + cid);
+}
+function fillCardPreview(html) {
+    var el = document.getElementById('overlay-card-preview');
+    if (el) el.innerHTML = html;
+}
+
+/* ── Note group: show/hide individual cards in-place ── */
+function toggleNoteCards(e, nid) {
+    e.stopPropagation();
+    var body = document.getElementById('note-cards-' + nid);
+    if (!body) return;
+    var toggle = e.currentTarget;
+    if (body.classList.contains('open')) {
+        body.classList.remove('open');
+        toggle.classList.remove('expanded');
+        toggle.innerHTML = toggle.innerHTML.replace('\u25be', '\u25b8');
+    } else {
+        body.classList.add('open');
+        toggle.classList.add('expanded');
+        toggle.innerHTML = toggle.innerHTML.replace('\u25b8', '\u25be');
+        /* Load cards if empty */
+        if (!body.hasChildNodes() || body.innerHTML.trim() === '') {
+            var parent = body.closest('.note-group');
+            var cidsAttr = parent ? parent.getAttribute('data-card-ids') : '';
+            if (cidsAttr) pycmd('lazy_load_note_cards:' + cidsAttr);
+        }
+    }
+}
 function closeOverlay() {
     const overlay = document.getElementById('overlay');
     overlay.classList.remove('visible');
@@ -204,6 +274,11 @@ function fillCards(data) {
             }
         }
     }
+}
+
+function fillNoteCards(nid, html) {
+    var body = document.getElementById('note-cards-' + nid);
+    if (body) body.innerHTML = html;
 }
 
 function initLazy() {

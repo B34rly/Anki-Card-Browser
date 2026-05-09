@@ -169,6 +169,35 @@ def is_io_mid(col, mid: int) -> bool:
     return result
 
 
+def get_note_fields(col, nid: int) -> list[tuple[str, str]]:
+    """Return [(field_name, field_value), ...] for a note."""
+    from anki.notes import NoteId
+
+    note = col.get_note(NoteId(nid))
+    model = col.models.get(note.mid)
+    if model is None:
+        return list(zip([f"Field {i}" for i in range(len(note.fields))], note.fields))
+    field_names = [f["name"] for f in model["flds"]]
+    return list(zip(field_names, note.fields))
+
+
+def get_card_template_names(col, nid: int) -> list[tuple[int, str]]:
+    """Return [(cid, template_name), ...] for all cards of a note."""
+    from anki.notes import NoteId
+
+    note = col.get_note(NoteId(nid))
+    model = col.models.get(note.mid)
+    cards = note.cards()
+    result: list[tuple[int, str]] = []
+    for card in cards:
+        if model and card.ord < len(model["tmpls"]):
+            name = model["tmpls"][card.ord]["name"]
+        else:
+            name = f"Card {card.ord + 1}"
+        result.append((card.id, name))
+    return result
+
+
 # Regex to extract mask data-attributes from cloze/cloze-inactive/cloze-highlight divs
 _MASK_RE = re.compile(
     r'<div\s+class="cloze(?:-inactive|-highlight)?"\s+'

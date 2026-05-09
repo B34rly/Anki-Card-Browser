@@ -349,7 +349,11 @@ class CardBrowserWidget(QWidget):
         self._filter_panel.setVisible(False)
         right_layout.addWidget(self._filter_panel)
 
-        self.tray = CardTray()
+        # ── Read display mode from config ──
+        conf = mw.addonManager.getConfig(__name__.split(".")[0]) or {}
+        display_mode = conf.get("display_mode", "cards")
+
+        self.tray = CardTray(display_mode=display_mode)
         self.tray.visible_section_changed.connect(self._on_visible_section)
         self.tray.subdeck_created.connect(self._refresh_current_deck)
         self.tray.tags_updated.connect(self._on_tags_updated)

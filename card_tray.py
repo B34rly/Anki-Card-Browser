@@ -38,12 +38,22 @@ from .card_data import (
     filter_cards_by_tag,
     get_tags_for_cards,
     get_flags_for_cards,
+    get_note_fields,
+    get_card_template_names,
     ACTIVE_ORDINAL_RE,
 )
 from .card_rendering import (
     build_io_card_html,
     render_normal_card,
     format_deck_path,
+    build_note_fields_table,
+    build_note_group_html,
+    build_note_card_count,
+)
+from .note_grouping import (
+    group_cards_by_note,
+    note_state_summary,
+    note_summary_counts,
 )
 
 
@@ -65,12 +75,14 @@ class CardTray(QWidget):
     # Emits after bridge cmd handles a card action (so viewer suppresses op hook)
     card_action_handled = pyqtSignal()
 
-    def __init__(self, title: str = "", parent=None):
+    def __init__(self, title: str = "", parent=None, display_mode: str = "cards"):
         super().__init__(parent)
 
+        self._display_mode: str = display_mode
         self._edit_mode: bool = False
         self._collapsed_decks: set[int] = set()
         self._io_group_map: dict[int, list[int]] = {}  # lead_cid → [group cids]
+        self._note_group_map: dict[int, list[int]] = {}  # lead_cid → [note group cids]
 
         # Context tracking for deferred targeted refresh
         self._pending_edit_cid: int | None = None
@@ -107,6 +119,14 @@ class CardTray(QWidget):
         self._header.setText(value)
 
     @property
+    def display_mode(self) -> str:
+        return self._display_mode
+
+    @display_mode.setter
+    def display_mode(self, value: str) -> None:
+        self._display_mode = value
+
+    @property
     def edit_mode(self) -> bool:
         return self._edit_mode
 
@@ -137,6 +157,14 @@ class CardTray(QWidget):
 
         if action == "lazy_load":
             self._on_lazy_load(col, payload)
+            return
+
+        if action == "lazy_load_note_cards":
+            self._on_lazy_load_note_cards(col, payload)
+            return
+
+        if action == "preview_card":
+            self._on_preview_card(col, payload)
             return
 
         if action == "review_due_deck":
@@ -371,6 +399,7 @@ class CardTray(QWidget):
         self._tree_name = root_name
         self._current_card_ids = None
         self._io_group_map.clear()
+        self._note_group_map.clear()
         self._render_deck_tree(emit_tags=True)
 
     def _render_deck_tree(self, emit_tags: bool = True) -> None:
@@ -378,6 +407,7 @@ class CardTray(QWidget):
         root_node = self._tree_root
         root_name = self._tree_name
         self._io_group_map.clear()
+        self._note_group_map.clear()
 
         col = mw.col
         if col is None:
@@ -397,14 +427,14 @@ class CardTray(QWidget):
         has_filters = bool(self._search_text or self._active_chips or self._tag_filter or self._criteria)
         if has_filters:
             filtered_total = self._apply_filters(col, all_cids)
-            self.title = f"{root_name}  ({len(filtered_total)} / {len(all_cids)} cards)"
+            self._set_title_from_cids(col, root_name, filtered_total, all_cids)
         else:
-            self.title = f"{root_name}  ({len(all_cids)} cards)"
+            self._set_title_from_cids(col, root_name, all_cids, all_cids)
 
         # Apply filters to root's own cards
         root_own = col.decks.cids(DeckId(root_node.deck_id), children=False)
         root_own_filtered = self._apply_filters(col, root_own)
-        root_cards = self._build_cards_html(col, root_own_filtered) if root_own_filtered else ""
+        root_cards = self._build_items_html(col, root_own_filtered) if root_own_filtered else ""
 
         child_sections = ""
         for child in root_node.children:
@@ -431,27 +461,45 @@ class CardTray(QWidget):
 
         self._render_page(body)
 
-    @staticmethod
-    def _state_counts_html(col, all_cids: Sequence[int]) -> str:
+    def _state_counts_html(self, col, all_cids: Sequence[int]) -> str:
         """Build compact coloured state-count spans for a deck header."""
+        meta = get_cards_metadata(col, all_cids) if all_cids else {}
+        today = col.sched.today if all_cids else 0
+
+        if self._display_mode == "notes" and all_cids:
+            sc = note_summary_counts(meta, all_cids, today)
+            n = sc["new"]
+            l = sc["learn"]
+            u = sc["upcoming"]
+            d = sc["due"]
+            notes = sc["notes"]
+            cards = sc["cards"]
+            counts = (
+                f'<span class="sc sc-new">{n}N</span> '
+                f'<span class="sc sc-learn">{l}L</span> '
+                f'<span class="sc sc-upcoming">{u}U</span> '
+                f'<span class="sc sc-due">{d}D</span>'
+            )
+            return (
+                f'<span class="card-count">{notes} Notes / {cards} '
+                f'<span class="state-counts">({counts})</span> cards</span>'
+            )
+
         total = len(all_cids)
         new = learn = due = upcoming = 0
-        if all_cids:
-            meta = get_cards_metadata(col, all_cids)
-            today = col.sched.today
-            for cid in all_cids:
-                m = meta.get(cid)
-                if m is None:
-                    continue
-                st = card_state_from_meta(m, today)
-                if st == "new":
-                    new += 1
-                elif st == "learn":
-                    learn += 1
-                elif st == "review-due":
-                    due += 1
-                elif st in ("review-soon", "review-mid", "review-later"):
-                    upcoming += 1
+        for cid in all_cids:
+            m = meta.get(cid)
+            if m is None:
+                continue
+            st = card_state_from_meta(m, today)
+            if st == "new":
+                new += 1
+            elif st == "learn":
+                learn += 1
+            elif st == "review-due":
+                due += 1
+            elif st in ("review-soon", "review-mid", "review-later"):
+                upcoming += 1
         counts = (
             f'<span class="sc sc-new">{new}N</span> '
             f'<span class="sc sc-learn">{learn}L</span> '
@@ -470,7 +518,7 @@ class CardTray(QWidget):
         all_cids = col.decks.cids(DeckId(deck_id), children=True)
 
         own_filtered = self._apply_filters(col, own_cids)
-        cards_html = self._build_cards_html(col, own_filtered) if own_filtered else ""
+        cards_html = self._build_items_html(col, own_filtered) if own_filtered else ""
 
         children_html = ""
         for child in node.children:
@@ -602,6 +650,91 @@ class CardTray(QWidget):
 
         return "\n".join(parts)
 
+    def _build_notes_html(self, col, card_ids: Sequence[int]) -> str:
+        """Build placeholder HTML for note-grouped display (notes mode)."""
+        if not card_ids:
+            return ""
+
+        groups = group_cards_by_note(col, card_ids)
+        meta = get_cards_metadata(col, card_ids)
+        today = col.sched.today
+        parts: list[str] = []
+
+        for ng in groups:
+            if ng.is_io:
+                # IO notes render the same as cards mode
+                lead_cid = ng.cids[0]
+                self._io_group_map[lead_cid] = ng.cids
+
+                summary = note_state_summary(meta, ng.cids, today)
+                cls_parts = ["card-frame", "card-placeholder"]
+                if summary["all_suspended"]:
+                    cls_parts.append("suspended")
+                if summary["dominant_state"]:
+                    cls_parts.append(f"state-{summary['dominant_state']}")
+                cls = " ".join(cls_parts)
+                badge = build_state_badge(summary["dominant_state"], summary["dominant_countdown"])
+                n_cards = len(ng.cids)
+                parts.append(
+                    f'<div class="{cls}" data-lazy="{lead_cid}">'
+                    f'  {badge}'
+                    f'  <div class="placeholder-inner">'
+                    f'    <span class="io-badge">{n_cards} occlusion cards</span>'
+                    f'  </div>'
+                    f'</div>'
+                )
+            elif len(ng.cids) == 1:
+                # Single-card notes render identically to cards mode
+                cid = ng.cids[0]
+                m = meta.get(cid, {})
+                state = card_state_from_meta(m, today)
+                countdown = card_countdown_from_meta(m, today)
+                suspended = m.get("queue") == QUEUE_TYPE_SUSPENDED
+
+                cls_parts = ["card-frame", "card-placeholder"]
+                if suspended:
+                    cls_parts.append("suspended")
+                if state:
+                    cls_parts.append(f"state-{state}")
+                cls = " ".join(cls_parts)
+                badge = build_state_badge(state, countdown)
+                parts.append(
+                    f'<div class="{cls}" data-lazy="{cid}">'
+                    f'  {badge}'
+                    f'  <div class="placeholder-inner"></div>'
+                    f'</div>'
+                )
+            else:
+                # Multi-card note: render note group with field table (lazy)
+                lead_cid = ng.cids[0]
+                self._note_group_map[lead_cid] = ng.cids
+
+                summary = note_state_summary(meta, ng.cids, today)
+                cls_parts = ["card-frame", "card-placeholder", "note-group-placeholder"]
+                if summary["all_suspended"]:
+                    cls_parts.append("suspended")
+                if summary["dominant_state"]:
+                    cls_parts.append(f"state-{summary['dominant_state']}")
+                cls = " ".join(cls_parts)
+                badge = build_state_badge(summary["dominant_state"], summary["dominant_countdown"])
+                count_html = build_note_card_count(summary)
+                parts.append(
+                    f'<div class="{cls}" data-lazy="{lead_cid}" data-nid="{ng.nid}">'
+                    f'  {badge}'
+                    f'  <div class="placeholder-inner">'
+                    f'    {count_html}'
+                    f'  </div>'
+                    f'</div>'
+                )
+
+        return "\n".join(parts)
+
+    def _build_items_html(self, col, card_ids: Sequence[int]) -> str:
+        """Dispatch to cards or notes HTML builder based on display mode."""
+        if self._display_mode == "notes":
+            return self._build_notes_html(col, card_ids)
+        return self._build_cards_html(col, card_ids)
+
     def _build_io_group(self, col, group_cids: list[int]) -> str:
         """Build full HTML for a group of IO cards (called during lazy load)."""
         first_card = col.get_card(CardId(group_cids[0]))
@@ -686,17 +819,81 @@ class CardTray(QWidget):
             cid = int(cid_s)
             if cid in self._io_group_map:
                 html = self._build_io_group(col, self._io_group_map[cid])
+            elif cid in self._note_group_map:
+                html = self._build_note_group(col, cid)
             else:
                 html = render_normal_card(col, cid)
             results[cid_s] = html
         data_json = json.dumps(results)
         self._web.eval(f"fillCards({data_json})")
 
+    def _build_note_group(self, col, lead_cid: int) -> str:
+        """Build full HTML for a multi-card note group (called during lazy load)."""
+        group_cids = self._note_group_map.get(lead_cid, [lead_cid])
+        meta = get_cards_metadata(col, group_cids)
+        today = col.sched.today
+
+        # Determine nid from lead card
+        m = meta.get(lead_cid)
+        if m is None:
+            return render_normal_card(col, lead_cid)
+        nid = m["nid"]
+
+        summary = note_state_summary(meta, group_cids, today)
+        fields = get_note_fields(col, nid)
+        fields_table = build_note_fields_table(fields)
+        card_names = get_card_template_names(col, nid)
+
+        try:
+            from anki.notes import NoteId
+            note = col.get_note(NoteId(nid))
+            tags = note.tags
+        except Exception:
+            tags = []
+
+        return build_note_group_html(
+            nid=nid,
+            fields_table=fields_table,
+            card_ids=group_cids,
+            card_names=card_names,
+            summary=summary,
+            tags=tags,
+        )
+
+    def _on_lazy_load_note_cards(self, col, payload: str) -> None:
+        """Handle lazy_load_note_cards: render individual cards within a note group."""
+        cids_str = [c.strip() for c in payload.split(",") if c.strip()]
+        parts: list[str] = []
+        for cid_s in cids_str:
+            cid = int(cid_s)
+            html = render_normal_card(col, cid)
+            parts.append(html)
+        combined = "\n".join(parts)
+        # Determine nid from first card
+        if cids_str:
+            first_cid = int(cids_str[0])
+            try:
+                card = col.get_card(CardId(first_cid))
+                nid = card.nid
+            except Exception:
+                nid = 0
+            escaped = json.dumps(combined)
+            self._web.eval(f"fillNoteCards({nid}, {escaped})")
+
+    def _on_preview_card(self, col, payload: str) -> None:
+        """Handle preview_card: render a single card's answer for overlay preview."""
+        cid = int(payload.strip())
+        card = col.get_card(CardId(cid))
+        answer_html = card.answer()
+        escaped = json.dumps(answer_html)
+        self._web.eval(f"fillCardPreview({escaped})")
+
     def set_cards(self, card_ids: Sequence[int]) -> None:
         """Render a flat list of cards (legacy single-deck view)."""
         self._current_card_ids = card_ids
         self._tree_root = None
         self._io_group_map.clear()
+        self._note_group_map.clear()
         col = mw.col
         if col is None:
             self._web.stdHtml("<p>No collection loaded.</p>")
@@ -705,7 +902,7 @@ class CardTray(QWidget):
             self._web.stdHtml("<p>No cards in this deck.</p>")
             return
 
-        body = f'<div class="deck-cards">{self._build_cards_html(col, card_ids)}</div>'
+        body = f'<div class="deck-cards">{self._build_items_html(col, card_ids)}</div>'
         self._render_page(body)
 
     def cleanup(self) -> None:
@@ -779,9 +976,36 @@ class CardTray(QWidget):
         has_filters = bool(self._search_text or self._active_chips or self._tag_filter or self._criteria)
         if has_filters:
             filtered_total = self._apply_filters(col, all_cids)
-            self.title = f"{self._tree_name}  ({len(filtered_total)} / {len(all_cids)} cards)"
+            self._set_title_from_cids(col, self._tree_name, filtered_total, all_cids)
         else:
-            self.title = f"{self._tree_name}  ({len(all_cids)} cards)"
+            self._set_title_from_cids(col, self._tree_name, all_cids, all_cids)
+
+    def _set_title_from_cids(self, col, root_name: str,
+                              visible_cids: Sequence[int],
+                              total_cids: Sequence[int]) -> None:
+        """Set the header title, using note/card counts in notes mode."""
+        has_filters = len(visible_cids) != len(total_cids)
+
+        if self._display_mode == "notes":
+            meta = get_cards_metadata(col, total_cids) if total_cids else {}
+            today = col.sched.today if total_cids else 0
+            total_sc = note_summary_counts(meta, total_cids, today)
+            if has_filters:
+                vis_meta = get_cards_metadata(col, visible_cids) if visible_cids else {}
+                vis_sc = note_summary_counts(vis_meta, visible_cids, today)
+                self.title = (
+                    f"{root_name}  ({vis_sc['notes']} / {total_sc['notes']} notes, "
+                    f"{vis_sc['cards']} / {total_sc['cards']} cards)"
+                )
+            else:
+                self.title = (
+                    f"{root_name}  ({total_sc['notes']} notes / {total_sc['cards']} cards)"
+                )
+        else:
+            if has_filters:
+                self.title = f"{root_name}  ({len(visible_cids)} / {len(total_cids)} cards)"
+            else:
+                self.title = f"{root_name}  ({len(total_cids)} cards)"
 
     def _refresh_all_header_counts(self, col) -> None:
         """Update all section header counts without touching card content."""

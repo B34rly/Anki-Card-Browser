@@ -1,13 +1,18 @@
-"""HTML rendering helpers for card frames and Image Occlusion cards.
+"""HTML rendering helpers for card frames, Image Occlusion, and note groups.
 
 Pure functions that take card data and return HTML strings. No Anki
 collection access — all needed data is passed in as arguments.
 """
 from __future__ import annotations
 
+import re
 from html import escape as _esc
 
 from .card_state import build_state_badge
+
+# ── Cloze marker styling ──
+_CLOZE_RE = re.compile(r'\{\{c(\d+)::(.+?)(?:::(.+?))?\}\}', re.DOTALL)
+_HTML_STRIP_RE = re.compile(r'<[^>]+>')
 
 
 def build_tag_strip(tags: list[str]) -> str:
@@ -177,3 +182,131 @@ def format_deck_path(full_path: str) -> str:
     if prefix:
         return f'<span class="deck-path">{prefix}::</span><span class="deck-leaf">{leaf}</span>'
     return f'<span class="deck-leaf">{leaf}</span>'
+
+
+# ── Note group rendering ──
+
+def _style_cloze_markers(html: str) -> str:
+    """Wrap cloze deletion markers in coloured spans for visibility."""
+    def _cloze_replacer(m: re.Match) -> str:
+        num = m.group(1)
+        content = m.group(2)
+        hint = m.group(3)
+        if hint:
+            return (
+                f'<span class="cloze-marker">'
+                f'<span class="cloze-num">c{num}::</span>'
+                f'{content}'
+                f'<span class="cloze-hint">::{_esc(hint)}</span>'
+                f'</span>'
+            )
+        return (
+            f'<span class="cloze-marker">'
+            f'<span class="cloze-num">c{num}::</span>'
+            f'{content}'
+            f'</span>'
+        )
+    return _CLOZE_RE.sub(_cloze_replacer, html)
+
+
+def build_note_fields_table(fields: list[tuple[str, str]]) -> str:
+    """Build an HTML table of note fields with field names as labels."""
+    rows: list[str] = []
+    for name, value in fields:
+        plain = _HTML_STRIP_RE.sub("", value).strip()
+        if not plain:
+            rows.append(
+                f'<tr class="note-field-row note-field-empty">'
+                f'<td class="note-field-name">{_esc(name)}</td>'
+                f'<td class="note-field-value">'
+                f'<span class="note-field-placeholder">empty</span>'
+                f'</td></tr>'
+            )
+        else:
+            styled = _style_cloze_markers(value)
+            rows.append(
+                f'<tr class="note-field-row">'
+                f'<td class="note-field-name">{_esc(name)}</td>'
+                f'<td class="note-field-value">{styled}</td>'
+                f'</tr>'
+            )
+    return f'<table class="note-fields-table">{"  ".join(rows)}</table>'
+
+
+def build_note_card_count(summary: dict) -> str:
+    """Build the compact card-count span for a note group top bar."""
+    total = summary["total"]
+    parts = (
+        f'<span class="sc sc-new">{summary["new"]}N</span> '
+        f'<span class="sc sc-learn">{summary["learn"]}L</span> '
+        f'<span class="sc sc-upcoming">{summary["upcoming"]}U</span> '
+        f'<span class="sc sc-due">{summary["due"]}D</span>'
+    )
+    return (
+        f'<span class="note-card-count">{total} '
+        f'<span class="state-counts">({parts})</span> cards</span>'
+    )
+
+
+def build_note_group_html(
+    nid: int,
+    fields_table: str,
+    card_ids: list[int],
+    card_names: list[tuple[int, str]],
+    summary: dict,
+    tags: list[str] | None = None,
+) -> str:
+    """Build full HTML for a multi-card note group block."""
+    state = summary["dominant_state"]
+    countdown = summary["dominant_countdown"]
+    all_suspended = summary["all_suspended"]
+
+    cls_parts = ["card-frame", "note-group"]
+    if all_suspended:
+        cls_parts.append("suspended")
+    if state:
+        cls_parts.append(f"state-{state}")
+    cls = " ".join(cls_parts)
+
+    lead_cid = card_ids[0]
+    cids_str = ",".join(str(c) for c in card_ids)
+    toggle_action = "unsuspend_group" if all_suspended else "suspend_group"
+    toggle_label = "Unsuspend all" if all_suspended else "Suspend all"
+
+    badge = build_state_badge(state, countdown)
+    tag_strip = build_tag_strip(tags or [])
+    count_html = build_note_card_count(summary)
+
+    # Card names for the overlay dropdown (embedded as data attributes)
+    card_names_str = "|".join(f"{cid}:{_esc(name)}" for cid, name in card_names)
+
+    n_cards = len(card_ids)
+    return (
+        f'<div class="{cls}" data-cid="{lead_cid}" data-nid="{nid}"'
+        f' data-card-ids="{cids_str}" data-card-names="{card_names_str}"'
+        f' onclick="expandNoteGroup(this)">'
+        f'  <div class="card-top-bar">'
+        f'    {badge}'
+        f'    {count_html}'
+        f'    {tag_strip}'
+        f'    <div class="card-actions">'
+        f'      <button class="edit-card-btn" onclick="editCard(event,{lead_cid})" title="Edit note">&#9998;</button>'
+        f'      <button class="card-menu-btn" onclick="toggleMenu(event,\'{lead_cid}\')" >&#8942;</button>'
+        f'    </div>'
+        f'  </div>'
+        f'  <div class="card-menu" id="menu-{lead_cid}">'
+        f'    <button onclick="cardAction(event,\'{toggle_action}\',\'{cids_str}\')">{toggle_label}</button>'
+        f'    <button onclick="cardAction(event,\'review_now_group\',\'{cids_str}\')">Review all now</button>'
+        f'    <hr class="card-menu-sep">'
+        f'    <button class="card-menu-danger edit-only" onclick="deleteCard(event,\'{cids_str}\')">Delete note</button>'
+        f'  </div>'
+        f'  <div class="card-content">'
+        f'    {fields_table}'
+        f'  </div>'
+        f'  <div class="note-cards-toggle" onclick="toggleNoteCards(event,{nid})">'
+        f'    Show {n_cards} cards &#9656;'
+        f'  </div>'
+        f'  <div class="note-cards-body" id="note-cards-{nid}">'
+        f'  </div>'
+        f'</div>'
+    )
