@@ -2,205 +2,34 @@ from __future__ import annotations
 
 from aqt import mw, gui_hooks
 from aqt.qt import (
-    QMainWindow,
     QWidget,
     QHBoxLayout,
     QVBoxLayout,
-    QFormLayout,
     QComboBox,
     QLineEdit,
     QSplitter,
     QToolButton,
     QLabel,
     QPushButton,
-    QSpinBox,
-    QFrame,
-    QIcon,
-    QPixmap,
     QTimer,
     Qt,
 )
 
-from .card_data import get_note_cards
-from .card_tray import CardTray
-from .deck_tree import DeckTree
-from .decks import get_top_level_decks, find_deck_node
+from ..core.card_data import get_note_cards
+from ..tray import CardTray
+from ..decks.sidebar import DeckTree
+from ..decks import get_top_level_decks, find_deck_node
 
-# ── Flag constants ──
-FLAG_NAMES: dict[int, str] = {
-    1: "Red", 2: "Orange", 3: "Green", 4: "Blue",
-    5: "Pink", 6: "Turquoise", 7: "Purple",
-}
-
-
-# ── Qt stylesheet for native widgets (palette-aware for light/dark) ──
-_QSS = """\
-QComboBox {
-    padding: 5px 10px;
-    border: 1px solid palette(mid);
-    border-radius: 4px;
-    background: palette(base);
-    min-height: 22px;
-}
-QComboBox:hover {
-    border-color: palette(dark);
-}
-QComboBox::drop-down {
-    border: none;
-    padding-right: 6px;
-}
-QComboBox QAbstractItemView {
-    background: palette(base);
-    selection-background-color: palette(highlight);
-    selection-color: palette(highlighted-text);
-    border: 1px solid palette(mid);
-    padding: 2px;
-}
-QSplitter::handle {
-    background: palette(mid);
-}
-QLineEdit {
-    padding: 5px 8px;
-    border: 1px solid palette(mid);
-    border-radius: 4px;
-    background: palette(base);
-    min-height: 22px;
-    font-size: 13px;
-}
-QLineEdit:focus {
-    border-color: palette(highlight);
-}
-QToolButton {
-    padding: 4px;
-    border-radius: 4px;
-    border: 1px solid transparent;
-}
-QToolButton:hover {
-    background: palette(midlight);
-    border-color: palette(mid);
-}
-QToolButton:checked {
-    background: palette(highlight);
-    color: palette(highlighted-text);
-}
-QPushButton#sortDirBtn {
-    padding: 4px;
-    border-radius: 4px;
-    border: 1px solid transparent;
-    background: transparent;
-}
-QPushButton#sortDirBtn:hover {
-    background: palette(midlight);
-    border-color: palette(mid);
-}
-QPushButton#filterChip {
-    padding: 3px 10px;
-    border: 1px solid palette(mid);
-    border-radius: 10px;
-    background: palette(base);
-    font-size: 12px;
-    min-height: 20px;
-}
-QPushButton#filterChip:hover {
-    border-color: palette(dark);
-}
-QPushButton#filterChip:checked {
-    border-color: palette(highlight);
-    background: palette(highlight);
-    color: palette(highlighted-text);
-}
-QLabel#filterLabel {
-    font-size: 12px;
-    color: palette(mid);
-    padding: 0 2px;
-}
-QFrame#filterPanel {
-    background: palette(base);
-    border: 1px solid palette(mid);
-    border-radius: 6px;
-    padding: 10px;
-}
-QFrame#filterPanel QLabel {
-    font-size: 12px;
-}
-QFrame#filterPanel QSpinBox {
-    padding: 2px 4px;
-    border: 1px solid palette(mid);
-    border-radius: 3px;
-    background: palette(base);
-    min-width: 70px;
-    min-height: 20px;
-    font-size: 12px;
-}
-QFrame#filterPanel QComboBox {
-    padding: 3px 8px;
-    min-height: 20px;
-    font-size: 12px;
-}
-QPushButton#filterToggle {
-    padding: 3px 10px;
-    border: 1px solid palette(mid);
-    border-radius: 4px;
-    background: palette(base);
-    font-size: 12px;
-    min-height: 20px;
-}
-QPushButton#filterToggle:hover {
-    border-color: palette(dark);
-    background: palette(midlight);
-}
-QPushButton#filterToggle[hasFilters="true"] {
-    border-color: palette(highlight);
-    color: palette(highlight);
-}
-QPushButton#clearFilters {
-    padding: 3px 10px;
-    border: 1px solid palette(mid);
-    border-radius: 4px;
-    background: palette(base);
-    font-size: 11px;
-    min-height: 18px;
-}
-QPushButton#clearFilters:hover {
-    border-color: palette(dark);
-    background: palette(midlight);
-}
-QLabel#filterSummary {
-    font-size: 11px;
-    color: palette(highlight);
-    padding: 0 4px;
-}
-"""
-
-# ── SVG icon templates for the toolbar toggle (use {color} placeholder) ──
-_SVG_VIEW = (
-    '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" '
-    'fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-    '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>'
-    '<circle cx="12" cy="12" r="3"/></svg>'
+from .style import (
+    _QSS,
+    _SVG_EDIT,
+    _SVG_VIEW,
+    _SVG_REFRESH,
+    _SVG_ARROW_DOWN,
+    _SVG_ARROW_UP,
+    _svg_icon,
 )
-_SVG_EDIT = (
-    '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" '
-    'fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-    '<path d="M12 20h9"/>'
-    '<path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>'
-)
-_SVG_REFRESH = (
-    '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" '
-    'fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-    '<path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>'
-    '<path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>'
-    '</svg>'
-)
-_SVG_ARROW_DOWN = '<path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/>'
-_SVG_ARROW_UP = '<path d="M12 19V5"/><path d="M5 12l7-7 7 7"/>'
-
-
-def _svg_icon(svg: str) -> QIcon:
-    """Build a QIcon from an inline SVG string."""
-    pm = QPixmap()
-    pm.loadFromData(svg.encode("utf-8"))
-    return QIcon(pm)
+from .filter_bar import FLAG_NAMES, build_filter_panel, build_criteria, build_filter_summary
 
 
 class CardBrowserWidget(QWidget):
@@ -243,7 +72,7 @@ class CardBrowserWidget(QWidget):
         search_row.setContentsMargins(0, 0, 0, 0)
         search_row.setSpacing(4)
         self._search = QLineEdit()
-        self._search.setPlaceholderText("Search subdecks\u2026")
+        self._search.setPlaceholderText("Search subdecks…")
         self._search.setClearButtonEnabled(True)
         self._search.textChanged.connect(self._on_search_changed)
         search_row.addWidget(self._search, 1)
@@ -287,7 +116,12 @@ class CardBrowserWidget(QWidget):
         row1_layout.setSpacing(6)
 
         self._card_search = QLineEdit()
-        self._card_search.setPlaceholderText("Search card content\u2026")
+        self._card_search.setPlaceholderText("Search card content…")
+        self._card_search.setToolTip(
+            "Plain text searches note content.\n"
+            "Queries with a colon use Anki search syntax, e.g.\n"
+            "tag:leech · is:due · flag:1 · added:7 · prop:ivl>=10"
+        )
         self._card_search.setClearButtonEnabled(True)
         self._card_search.setMaximumWidth(220)
         self._search_timer = QTimer()
@@ -297,7 +131,7 @@ class CardBrowserWidget(QWidget):
         self._card_search.textChanged.connect(lambda: self._search_timer.start())
         row1_layout.addWidget(self._card_search)
 
-        sep1 = QLabel("\u2502")
+        sep1 = QLabel("│")
         sep1.setObjectName("filterLabel")
         row1_layout.addWidget(sep1)
 
@@ -326,7 +160,7 @@ class CardBrowserWidget(QWidget):
         row2_layout.setContentsMargins(8, 2, 8, 4)
         row2_layout.setSpacing(6)
 
-        self._filter_btn = QPushButton("\u2699 Filters")
+        self._filter_btn = QPushButton("⚙ Filters")
         self._filter_btn.setObjectName("filterToggle")
         self._filter_btn.clicked.connect(self._toggle_filter_panel)
         row2_layout.addWidget(self._filter_btn)
@@ -364,7 +198,7 @@ class CardBrowserWidget(QWidget):
         right_layout.addWidget(row2)
 
         # ── Filter panel (collapsed by default) ──
-        self._filter_panel = self._build_filter_panel()
+        self._filter_panel = build_filter_panel(self)
         self._filter_panel.setVisible(False)
         right_layout.addWidget(self._filter_panel)
 
@@ -464,68 +298,6 @@ class CardBrowserWidget(QWidget):
 
     # ── Filter toolbar ──
 
-    def _build_filter_panel(self) -> QFrame:
-        """Build the collapsible advanced filter panel."""
-        panel = QFrame()
-        panel.setObjectName("filterPanel")
-        form = QFormLayout(panel)
-        form.setContentsMargins(12, 8, 12, 8)
-        form.setSpacing(6)
-        form.setHorizontalSpacing(12)
-
-        # Tag
-        self._tag_combo = QComboBox()
-        self._tag_combo.addItem("All tags", userData="")
-        self._tag_combo.setMinimumWidth(140)
-        self._tag_combo.currentIndexChanged.connect(self._apply_filters)
-        form.addRow("Tag:", self._tag_combo)
-
-        # Flag
-        self._flag_combo = QComboBox()
-        self._flag_combo.addItem("Any flag", userData=0)
-        self._flag_combo.setMinimumWidth(140)
-        self._flag_combo.currentIndexChanged.connect(self._apply_filters)
-        form.addRow("Flag:", self._flag_combo)
-
-        self._ease_min, self._ease_max = self._add_range_row(form, "Ease:", 999, "%")
-        self._ivl_min, self._ivl_max = self._add_range_row(form, "Interval:", 99999, " d")
-        self._lapse_min, self._lapse_max = self._add_range_row(form, "Lapses:", 99999)
-        self._reps_min, self._reps_max = self._add_range_row(form, "Reviews:", 99999)
-
-        # Clear all button
-        clear_row = QHBoxLayout()
-        clear_row.addStretch()
-        clear_btn = QPushButton("Clear all filters")
-        clear_btn.setObjectName("clearFilters")
-        clear_btn.clicked.connect(self._clear_all_filters)
-        clear_row.addWidget(clear_btn)
-        form.addRow("", clear_row)
-
-        return panel
-
-    def _add_range_row(
-        self, form: QFormLayout, label: str, maximum: int, suffix: str = ""
-    ) -> tuple[QSpinBox, QSpinBox]:
-        """Add a min–max spinbox row to the filter panel; 0 means 'no limit'."""
-        row = QHBoxLayout()
-        row.setSpacing(4)
-        boxes: list[QSpinBox] = []
-        for special in ("Min", "Max"):
-            sb = QSpinBox()
-            sb.setRange(0, maximum)
-            sb.setValue(0)
-            if suffix:
-                sb.setSuffix(suffix)
-            sb.setSpecialValueText(special)
-            sb.editingFinished.connect(self._apply_filters)
-            boxes.append(sb)
-        row.addWidget(boxes[0])
-        row.addWidget(QLabel("–"))
-        row.addWidget(boxes[1])
-        row.addStretch()
-        form.addRow(label, row)
-        return boxes[0], boxes[1]
-
     def _toggle_filter_panel(self) -> None:
         vis = not self._filter_panel.isVisible()
         self._filter_panel.setVisible(vis)
@@ -562,49 +334,6 @@ class CardBrowserWidget(QWidget):
                 self._flag_combo.setCurrentIndex(idx)
         self._flag_combo.blockSignals(False)
 
-    def _build_criteria(self) -> dict:
-        """Gather advanced filter criteria from the panel widgets (0 = no limit)."""
-        criteria: dict = {}
-        flag = self._flag_combo.currentData()
-        if flag:
-            criteria["flag"] = flag
-        ranges = (
-            # Ease is entered as % but filtered in permille, hence the ×10.
-            ("min_ease", self._ease_min, 10), ("max_ease", self._ease_max, 10),
-            ("min_ivl", self._ivl_min, 1), ("max_ivl", self._ivl_max, 1),
-            ("min_lapses", self._lapse_min, 1), ("max_lapses", self._lapse_max, 1),
-            ("min_reps", self._reps_min, 1), ("max_reps", self._reps_max, 1),
-        )
-        for key, sb, mult in ranges:
-            if sb.value() > 0:
-                criteria[key] = sb.value() * mult
-        return criteria
-
-    def _build_filter_summary(self, criteria: dict, tag_filter: str) -> str:
-        """Build a short summary string of active advanced filters."""
-        parts: list[str] = []
-        if tag_filter:
-            parts.append(f"Tag: {tag_filter}")
-        if criteria.get("flag"):
-            parts.append(f"Flag: {FLAG_NAMES.get(criteria['flag'], '?')}")
-        ranges = (
-            # (label, min key, max key, unit, divisor back to display units)
-            ("Ease", "min_ease", "max_ease", "%", 10),
-            ("Ivl", "min_ivl", "max_ivl", "d", 1),
-            ("Lapses", "min_lapses", "max_lapses", "", 1),
-            ("Reps", "min_reps", "max_reps", "", 1),
-        )
-        for label, lo_key, hi_key, unit, div in ranges:
-            lo = criteria.get(lo_key, 0) // div
-            hi = criteria.get(hi_key, 0) // div
-            if lo and hi:
-                parts.append(f"{label}: {lo}\u2013{hi}{unit}")
-            elif lo:
-                parts.append(f"{label} \u2265 {lo}{unit}")
-            elif hi:
-                parts.append(f"{label} \u2264 {hi}{unit}")
-        return "  \u00b7  ".join(parts)
-
     def _apply_filters(self) -> None:
         """Gather current filter/sort state and push to the tray."""
         search_text = self._card_search.text().strip()
@@ -612,10 +341,10 @@ class CardBrowserWidget(QWidget):
         tag_filter = self._tag_combo.currentData() or ""
         sort_key = self._sort_combo.currentData() or "deck"
         sort_reverse = not self._sort_ascending
-        criteria = self._build_criteria()
+        criteria = build_criteria(self)
 
         # Update summary label and filter button indicator
-        summary = self._build_filter_summary(criteria, tag_filter)
+        summary = build_filter_summary(criteria, tag_filter)
         self._filter_summary.setText(summary)
         has_advanced = bool(criteria or tag_filter)
         self._filter_btn.setProperty("hasFilters", has_advanced)
@@ -795,7 +524,7 @@ class CardBrowserWidget(QWidget):
 
         if not to_refresh:
             return  # the change was outside the rendered tree
-        if len(to_refresh) > 25 or (len(to_refresh) > 1 and self.tray._has_filters):
+        if len(to_refresh) > 25 or (len(to_refresh) > 1 and self.tray.has_filters):
             # Bulk change — or several sections to rebuild under active
             # filters, where per-note refreshes each rebuild a section (or the
             # whole tree); one render is cheaper and equally correct.
@@ -813,144 +542,3 @@ class CardBrowserWidget(QWidget):
     def _update_refresh_icon(self) -> None:
         color = self.palette().windowText().color().name()
         self._refresh_btn.setIcon(_svg_icon(_SVG_REFRESH.format(color=color)))
-
-
-# ── Window mode ──
-
-
-class CardBrowserWindow(QMainWindow):
-    """Standalone floating window wrapping CardBrowserWidget."""
-
-    _instance: CardBrowserWindow | None = None
-
-    def __init__(self, parent=None):
-        super().__init__(parent, Qt.WindowType.Window)
-        self.setWindowTitle("Card Browser")
-        self.resize(1100, 750)
-        self._widget = CardBrowserWidget(self)
-        self.setCentralWidget(self._widget)
-
-    def closeEvent(self, a0):
-        CardBrowserWindow._instance = None
-        self._widget.cleanup()
-        super().closeEvent(a0)
-
-
-def open_card_browser_window():
-    """Open the Card Browser as a standalone window (singleton)."""
-    if CardBrowserWindow._instance is None:
-        CardBrowserWindow._instance = CardBrowserWindow(mw)
-    CardBrowserWindow._instance.show()
-    CardBrowserWindow._instance.activateWindow()
-    # Refresh the top-level deck dropdown (a deck may have been added/removed);
-    # this is a no-op render when the selection is unchanged.
-    CardBrowserWindow._instance._widget._populate_combo()
-
-
-# ── Embedded mode ──
-
-
-class EmbeddedBrowser:
-    """Manages showing/hiding the CardBrowserWidget inside Anki's main window."""
-
-    _instance: EmbeddedBrowser | None = None
-
-    def __init__(self) -> None:
-        self._widget: CardBrowserWidget | None = None
-        self._active = False
-        # This is a lifetime singleton (the widget is created once and reused), so
-        # these hooks are registered exactly once and never need removing.
-        gui_hooks.state_will_change.append(self._on_state_will_change)
-        # After an op (e.g. editing a card) Anki re-renders its own screen into
-        # mw.web and re-shows it on top of us. These post-render hooks fire *after*
-        # that show, so re-hiding here reliably keeps us in front — whether the
-        # browser was opened over the deck list or a deck's overview.
-        gui_hooks.deck_browser_did_render.append(self._reassert)
-        gui_hooks.overview_did_refresh.append(self._reassert)
-
-    def show(self) -> None:
-        if self._widget is None:
-            self._widget = CardBrowserWidget(mw)
-            mw.mainLayout.addWidget(self._widget)
-
-        # Hide Anki's own content areas and bring ours to the front. bottomWeb
-        # needs a *real* Qt hide (setVisible): its own hide() merely collapses the
-        # height to 1px, and Anki re-expands it asynchronously after every render
-        # (BottomBar.draw / moveToState → adjustHeightToFit → setFixedHeight lands
-        # a turn later, after our render hooks), which flashed the bottom toolbar
-        # ("Get Shared / Create Deck / Import File") back over us. A setVisible
-        # widget is dropped from the layout and ignores that deferred height change.
-        mw.web.hide()
-        mw.bottomWeb.setVisible(False)
-        self._widget.show()
-        self._widget.raise_()
-        self._active = True
-
-        # Refresh content (deck list may have changed)
-        self._widget._populate_combo()
-
-    def hide(self) -> None:
-        if not self._active:
-            return
-        self._active = False
-        if self._widget is not None:
-            self._widget.hide()
-        # Restore Anki's own content areas. bottomWeb was Qt-hidden via setVisible,
-        # so make it visible again and let its height re-fit to content.
-        mw.web.show()
-        mw.bottomWeb.setVisible(True)
-        mw.bottomWeb.show()
-
-    def _reassert(self, *args) -> None:
-        """Keep our widget in front if Anki re-rendered its deck browser over us."""
-        if self._active and self._widget is not None:
-            mw.web.hide()
-            mw.bottomWeb.setVisible(False)
-            self._widget.raise_()
-
-    def _on_state_will_change(self, new_state: str, old_state: str) -> None:
-        # When Anki transitions to any standard state, hide viewer
-        if self._active:
-            self.hide()
-
-    def teardown(self) -> None:
-        """Destroy the widget (profile close) so no stale collection state
-        survives into the next profile. The singleton and its hooks remain;
-        they no-op until show() builds a fresh widget."""
-        self.hide()
-        if self._widget is not None:
-            self._widget.cleanup()
-            self._widget.deleteLater()
-            self._widget = None
-
-
-def open_card_browser_embedded():
-    """Show the browser inside Anki's main window."""
-    if EmbeddedBrowser._instance is None:
-        EmbeddedBrowser._instance = EmbeddedBrowser()
-    EmbeddedBrowser._instance.show()
-
-
-def open_card_browser():
-    """Open the Card Browser using the configured mode."""
-    conf = mw.addonManager.getConfig(__name__.split(".")[0]) or {}
-    mode = conf.get("mode", "embedded")
-    if mode == "window":
-        open_card_browser_window()
-    else:
-        open_card_browser_embedded()
-
-
-def _on_profile_will_close() -> None:
-    """Tear down any open browser UI before the collection goes away.
-
-    Both hosts hold references into the closing collection (deck tree nodes,
-    card-id snapshots, hooks); a fresh widget is built on next open.
-    """
-    if CardBrowserWindow._instance is not None:
-        CardBrowserWindow._instance.close()
-    if EmbeddedBrowser._instance is not None:
-        EmbeddedBrowser._instance.teardown()
-
-
-gui_hooks.profile_will_close.append(_on_profile_will_close)

@@ -10,7 +10,7 @@ from aqt.qt import (
     pyqtSignal,
 )
 
-from .deck_ops import (
+from .ops import (
     open_add_cards,
     prompt_new_subdeck,
     prompt_rename_deck,

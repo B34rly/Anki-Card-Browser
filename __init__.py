@@ -1,6 +1,6 @@
 from aqt import gui_hooks
 
-from .card_data import clear_caches
+from .core.card_data import clear_caches
 from .viewer import open_card_browser
 
 
