@@ -23,16 +23,20 @@ class NoteGroup(NamedTuple):
     is_io: bool
 
 
-def group_cards_by_note(col, card_ids: Sequence[int]) -> list[NoteGroup]:
+def group_cards_by_note(
+    col, card_ids: Sequence[int], meta: dict[int, dict] | None = None
+) -> list[NoteGroup]:
     """Group card IDs by their parent note, preserving first-card order.
 
     Returns an ordered list of NoteGroup tuples. IO notes are flagged
-    so the caller can use existing IO rendering.
+    so the caller can use existing IO rendering. *meta* may be a pre-fetched
+    metadata map (a superset is fine); it is fetched here only when omitted.
     """
     if not card_ids:
         return []
 
-    meta = get_cards_metadata(col, card_ids)
+    if meta is None:
+        meta = get_cards_metadata(col, card_ids)
 
     seen: dict[int, list[int]] = {}
     mid_map: dict[int, int] = {}
@@ -66,11 +70,14 @@ def note_state_summary(meta: dict[int, dict], cids: list[int], today: int) -> di
     """Compute state summary for a note's cards.
 
     Returns dict with keys: total, new, learn, due, upcoming, suspended,
-    dominant_state, dominant_countdown, all_suspended.
+    dominant_state, dominant_countdown, all_suspended, all_buried.
     """
-    from anki.consts import QUEUE_TYPE_SUSPENDED
+    from anki.consts import (
+        QUEUE_TYPE_SUSPENDED, QUEUE_TYPE_MANUALLY_BURIED, QUEUE_TYPE_SIBLING_BURIED,
+    )
 
     counts = {"total": 0, "new": 0, "learn": 0, "due": 0, "upcoming": 0, "suspended": 0}
+    buried = 0
     dominant_state = ""
     dominant_countdown = ""
 
@@ -80,9 +87,12 @@ def note_state_summary(meta: dict[int, dict], cids: list[int], today: int) -> di
             continue
         counts["total"] += 1
 
-        if m.get("queue") == QUEUE_TYPE_SUSPENDED:
+        q = m.get("queue")
+        if q == QUEUE_TYPE_SUSPENDED:
             counts["suspended"] += 1
             continue
+        if q in (QUEUE_TYPE_MANUALLY_BURIED, QUEUE_TYPE_SIBLING_BURIED):
+            buried += 1
 
         st = card_state_from_meta(m, today)
         if st == "new":
@@ -103,6 +113,7 @@ def note_state_summary(meta: dict[int, dict], cids: list[int], today: int) -> di
         "dominant_state": dominant_state,
         "dominant_countdown": dominant_countdown,
         "all_suspended": counts["suspended"] == counts["total"] and counts["total"] > 0,
+        "all_buried": buried == counts["total"] and counts["total"] > 0,
     }
 
 

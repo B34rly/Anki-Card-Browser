@@ -1,5 +1,6 @@
 from aqt import gui_hooks
 
+from .card_data import clear_caches
 from .viewer import open_card_browser
 
 
@@ -16,3 +17,6 @@ def on_top_toolbar_did_init_links(links, toolbar):
 
 
 gui_hooks.top_toolbar_did_init_links.append(on_top_toolbar_did_init_links)
+# Clear per-collection caches (e.g. IO notetype lookups) when the collection
+# changes, so model ids from a previous profile are never reused.
+gui_hooks.collection_did_load.append(lambda col: clear_caches())

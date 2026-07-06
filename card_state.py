@@ -60,8 +60,22 @@ STATE_PRIORITY = {
 }
 
 
-def card_state_from_meta(meta: dict, today: int = 0) -> str:
+def group_flag(flag_values) -> int:
+    """The flag shared by every card of a group, or 0 when they disagree.
+
+    A card's flag lives in the low 3 bits of ``cards.flags``; raw ``flags``
+    values and ``Card.user_flag()`` results can both be passed.
+    """
+    vals = {int(v) & 0b111 for v in flag_values}
+    return vals.pop() if len(vals) == 1 else 0
+
+
+def card_state_from_meta(meta: dict, today: int) -> str:
     """Return the card's visual state string.
+
+    *today* is ``col.sched.today`` (days since collection creation); pass it
+    explicitly — it is required so review urgency is computed correctly even on
+    the collection's creation day (when ``today == 0`` is a legitimate value).
 
     Review cards are split into sub-states based on days until due:
       'review-due'   — due today or overdue
@@ -77,7 +91,7 @@ def card_state_from_meta(meta: dict, today: int = 0) -> str:
     if q in (QUEUE_TYPE_LRN, QUEUE_TYPE_DAY_LEARN_RELEARN) or meta["type"] in (CARD_TYPE_LRN, CARD_TYPE_RELEARNING):
         return "learn"
     # Review card — determine urgency sub-state
-    days = meta["due"] - today if today else 0
+    days = meta["due"] - today
     if days <= 0:
         return "review-due"
     if days <= 3:
@@ -199,9 +213,10 @@ def filter_cards_by_states(
             result.add(cid)
             continue
         if not include_suspended and is_susp:
-            # When suspended chip is not active, suspended cards are still
-            # shown (they're visually dimmed). But if *any* state chip is
-            # active, only show suspended cards if "suspended" is toggled.
+            # A state chip is active but "Suspended" is not among the active
+            # chips, so suspended cards are excluded from the result. (When no
+            # chips are active at all we return early above and never reach
+            # here, so suspended cards remain visible in the unfiltered view.)
             continue
         state = card_state_from_meta(m, today)
         if state in allowed_states:

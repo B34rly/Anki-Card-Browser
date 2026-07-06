@@ -9,21 +9,53 @@ var _editMode = false;
 function setEditMode(on) {
     _editMode = on;
     document.body.classList.toggle('view-mode', !on);
+    if (!on) closeAllCardMenus();
 }
-setEditMode(false);
+/* Python bakes _initialEditMode into the page before this script, so the page
+   loads directly in the right mode (no flash of the wrong controls). */
+setEditMode(typeof _initialEditMode === 'undefined' ? false : _initialEditMode);
+/* Escape text for safe insertion into innerHTML. Used for values that arrive
+   via data-* attributes (the browser decodes entities on getAttribute, so they
+   must be re-escaped before being concatenated into markup). */
+function escapeHtml(s) {
+    return String(s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function closeAllCardMenus() {
+    document.querySelectorAll('.card-menu.open').forEach(function(m) {
+        m.classList.remove('open', 'flip-up');
+    });
+    document.querySelectorAll('.card-frame.menu-open').forEach(function(f) {
+        f.classList.remove('menu-open');
+    });
+}
 function toggleMenu(e, id) {
     e.stopPropagation();
-    document.querySelectorAll('.card-menu.open').forEach(m => {
-        if (m.id !== 'menu-' + id) m.classList.remove('open');
-    });
-    document.getElementById('menu-' + id).classList.toggle('open');
+    var menu = document.getElementById('menu-' + id);
+    if (!menu) return;
+    var wasOpen = menu.classList.contains('open');
+    closeAllCardMenus();
+    if (wasOpen) return;  /* second click on the same button closes it */
+    menu.classList.add('open');
+    menu.classList.remove('flip-up');
+    /* Lift every enclosing card-frame so none clips/scales the menu (note-group
+       inner cards are frames nested inside the note-group frame). */
+    var f = menu.parentElement;
+    while (f) {
+        if (f.classList && f.classList.contains('card-frame')) f.classList.add('menu-open');
+        f = f.parentElement;
+    }
+    /* Flip above the button if the menu would overflow the viewport bottom. */
+    if (menu.getBoundingClientRect().bottom > window.innerHeight - 6) {
+        menu.classList.add('flip-up');
+    }
 }
-document.addEventListener('click', () => {
-    document.querySelectorAll('.card-menu.open').forEach(m => m.classList.remove('open'));
-});
+document.addEventListener('click', function() { closeAllCardMenus(); });
 function cardAction(e, action, cid) {
     e.stopPropagation();
-    document.querySelectorAll('.card-menu.open').forEach(m => m.classList.remove('open'));
+    closeAllCardMenus();
+    if (!_editMode) return;  /* view mode is read-only */
     pycmd(action + ':' + cid);
 }
 function editCard(e, cid) {
@@ -32,7 +64,8 @@ function editCard(e, cid) {
 }
 function deleteCard(e, cid) {
     e.stopPropagation();
-    document.querySelectorAll('.card-menu.open').forEach(m => m.classList.remove('open'));
+    closeAllCardMenus();
+    if (!_editMode) return;  /* view mode is read-only */
     pycmd('delete_card:' + cid);
 }
 function expandCard(el) {
@@ -69,7 +102,7 @@ function expandNoteGroup(el) {
             var sep = entry.indexOf(':');
             var cid = entry.substring(0, sep);
             var name = entry.substring(sep + 1);
-            fieldsHtml += '<option value="' + cid + '">' + name + '</option>';
+            fieldsHtml += '<option value="' + cid + '">' + escapeHtml(name) + '</option>';
         });
         fieldsHtml += '</select>';
         fieldsHtml += '<div class="overlay-card-preview" id="overlay-card-preview"></div>';
@@ -99,9 +132,9 @@ function fillCardPreview(html) {
 }
 
 /* ── Note group: show/hide individual cards in-place ── */
-function toggleNoteCards(e, nid) {
+function toggleNoteCards(e, gk) {
     e.stopPropagation();
-    var body = document.getElementById('note-cards-' + nid);
+    var body = document.getElementById('note-cards-' + gk);
     if (!body) return;
     var toggle = e.currentTarget;
     if (body.classList.contains('open')) {
@@ -134,27 +167,40 @@ function deckAction(e, action, deckId) {
     e.stopPropagation();
     pycmd(action + ':' + deckId);
 }
-function addCard(e, deckId) {
-    e.stopPropagation();
-    pycmd('add_card:' + deckId);
-}
 
 /* ── Header plus-button dropdown ── */
 var _plusMenu = null;
+var _plusMenuHeader = null;
 function togglePlusMenu(e, deckId) {
     e.stopPropagation();
-    closePlusMenu();
     var menu = document.getElementById('plus-menu-' + deckId);
     if (!menu) return;
+    var wasOpen = (_plusMenu === menu);
+    closePlusMenu();
+    if (wasOpen) return;  /* second click on the same button closes it */
     var btn = e.currentTarget;
     var rect = btn.getBoundingClientRect();
-    menu.style.left = rect.left + 'px';
-    menu.style.top = rect.bottom + 2 + 'px';
-    menu.classList.add('open');
+    menu.classList.add('open');   /* display:block so we can measure it */
     _plusMenu = menu;
+    /* The menu is position:fixed but lives inside a sticky .deck-header, which is
+       its own stacking context — its z-index is confined there and later headers
+       paint over it. Lift the enclosing header above its siblings while the menu
+       is open (no effect for the root header, which isn't sticky). */
+    var hdr = menu.closest('.deck-header');
+    if (hdr) { hdr.classList.add('plus-open'); _plusMenuHeader = hdr; }
+    /* Anchor below the button, flipping up / clamping in so it never opens
+       off-screen for decks near the viewport edge. */
+    var mh = menu.offsetHeight, mw = menu.offsetWidth;
+    var top = rect.bottom + 2;
+    if (top + mh + 4 > window.innerHeight) top = Math.max(4, rect.top - mh - 2);
+    var left = Math.min(rect.left, window.innerWidth - mw - 6);
+    if (left < 4) left = 4;
+    menu.style.top = top + 'px';
+    menu.style.left = left + 'px';
 }
 function closePlusMenu() {
     if (_plusMenu) { _plusMenu.classList.remove('open'); _plusMenu = null; }
+    if (_plusMenuHeader) { _plusMenuHeader.classList.remove('plus-open'); _plusMenuHeader = null; }
 }
 document.addEventListener('click', closePlusMenu);
 function plusAction(e, action, deckId) {
@@ -168,8 +214,10 @@ function toggleSection(deckId) {
     var body = document.getElementById('body-' + deckId);
     var arrow = document.getElementById('arrow-' + deckId);
     if (!body) return;
+    var collapsing;
     if (body.style.height === '0px') {
         /* Expand */
+        collapsing = false;
         body.style.height = body.scrollHeight + 'px';
         body.addEventListener('transitionend', function handler() {
             body.style.height = 'auto';
@@ -178,13 +226,16 @@ function toggleSection(deckId) {
         });
     } else {
         /* Collapse: set explicit height first so transition has a start value */
+        collapsing = true;
         body.classList.add('collapsed');
         body.style.height = body.scrollHeight + 'px';
         body.offsetHeight; /* force reflow */
         body.style.height = '0px';
     }
     if (arrow) arrow.classList.toggle('collapsed');
-    pycmd('toggle_section:' + deckId);
+    /* Report the explicit end state — a toggle could invert Python's persisted
+       state if this message replayed or raced a re-render. */
+    pycmd('set_collapsed:' + deckId + ':' + (collapsing ? 1 : 0));
 }
 function scrollToSection(deckId) {
     var el = document.querySelector('[data-deck-id="' + deckId + '"]');
@@ -197,6 +248,11 @@ function scrollToSection(deckId) {
             var id = p.id.replace('body-', '');
             var a = document.getElementById('arrow-' + id);
             if (a) a.classList.remove('collapsed');
+            /* Keep Python's _collapsed_decks in sync so the next full render
+               doesn't re-collapse the section the user just scrolled into.
+               The explicit state is idempotent — it can't invert the persisted
+               state if this message races a re-render. */
+            pycmd('set_collapsed:' + id + ':0');
         }
         p = p.parentElement;
     }
@@ -231,6 +287,8 @@ function scrollToSection(deckId) {
     document.querySelectorAll('.deck-header').forEach(function(h) {
         observer.observe(h);
     });
+    /* Allow replaceSection() to re-observe headers it rebuilds. */
+    window._spyObserve = function(h) { if (h) observer.observe(h); };
 })();
 
 /* ── Lazy loading via IntersectionObserver ── */
@@ -283,8 +341,8 @@ function fillCards(data) {
     });
 }
 
-function fillNoteCards(nid, html) {
-    var body = document.getElementById('note-cards-' + nid);
+function fillNoteCards(gk, html) {
+    var body = document.getElementById('note-cards-' + gk);
     if (body) body.innerHTML = html;
 }
 
@@ -402,6 +460,11 @@ function replaceSection(deckId, html) {
     var neo = tmp.firstElementChild;
     if (!neo) return;
     old.parentNode.replaceChild(neo, old);
+    /* Re-register the scroll-spy observer for every header in the rebuilt subtree
+       (_build_section is recursive, so child subsection headers are new too). */
+    if (window._spyObserve) {
+        neo.querySelectorAll('.deck-header').forEach(function(h) { window._spyObserve(h); });
+    }
     /* Re-observe new placeholders inside the replaced section */
     neo.querySelectorAll('.card-placeholder[data-lazy]').forEach(function(el) {
         _lazyObserver.observe(el);
@@ -421,10 +484,18 @@ function updateHeaderCounts(deckId, countsHtml) {
     if (cc) cc.outerHTML = countsHtml;
 }
 
-/* ── Single-card targeted refresh ── */
-function replaceCard(cid, html) {
-    var old = document.querySelector('[data-cid="' + cid + '"]')
-           || document.querySelector('[data-lazy="' + cid + '"]');
+/* ── Targeted unit refresh (single cards and groups) ──
+   A rendered unit is found by its note-group lead (data-group-lead), its card
+   id (data-cid), or — when it hasn't lazy-loaded yet — its placeholder
+   (data-lazy). One lookup serves all shapes so the replace/remove logic can't
+   diverge between cards and groups. */
+function _unitEl(id) {
+    return document.querySelector('[data-group-lead="' + id + '"]')
+        || document.querySelector('[data-cid="' + id + '"]')
+        || document.querySelector('[data-lazy="' + id + '"]');
+}
+function _swapUnit(id, html) {
+    var old = _unitEl(id);
     if (!old) return;
     var tmp = document.createElement('div');
     tmp.innerHTML = html.trim();
@@ -437,9 +508,70 @@ function replaceCard(cid, html) {
         layoutGridOnImages(container);
     }
 }
+function replaceCard(cid, html) { _swapUnit(cid, html); }
+function replaceGroup(leadCid, html) { _swapUnit(leadCid, html); }
 function removeCard(cid) {
-    var old = document.querySelector('[data-cid="' + cid + '"]')
-           || document.querySelector('[data-lazy="' + cid + '"]');
+    var old = _unitEl(cid);
     if (old) old.remove();
+}
+function removeGroup(leadCid) { removeCard(leadCid); }
+
+/* ── Scroll position reporting + restore across full re-renders ──
+   A raw pixel offset is meaningless across a re-render: cards lazy-load at
+   variable heights, so the document grows as you scroll and the same offset maps
+   to a different section. Instead we anchor to the deck *section* at the top of
+   the viewport plus how far we've scrolled into it, then re-resolve that section's
+   live position on restore. */
+var _scrollReportTimer = null;
+var _suppressScrollReport = false;
+
+/* Deepest deck-section whose top edge is at or above the viewport top.
+   Sections appear in document order and their tops only increase (children
+   start at or below their parent), so stop at the first one below the line
+   instead of measuring every section on each scroll tick. */
+function _anchorSection() {
+    var best = null;
+    var secs = document.querySelectorAll('.deck-section');
+    for (var i = 0; i < secs.length; i++) {
+        if (secs[i].getBoundingClientRect().top <= 4) best = secs[i];
+        else break;
+    }
+    return best;
+}
+window.addEventListener('scroll', function() {
+    if (_suppressScrollReport || _scrollReportTimer) return;
+    _scrollReportTimer = setTimeout(function() {
+        _scrollReportTimer = null;
+        var s = _anchorSection();
+        if (s) {
+            var depth = Math.round(-s.getBoundingClientRect().top);
+            pycmd('scroll:' + s.getAttribute('data-deck-id') + ':' + depth);
+        } else {
+            pycmd('scroll:0:' + Math.round(window.scrollY));
+        }
+    }, 120);
+}, { passive: true });
+
+/* Called by Python (after a full render) to jump back to the saved anchor.
+   deckId 0 means "no section anchor — use the raw offset". The section's live
+   position is measured now (above content is still short placeholders), so the
+   anchored section lands at the same spot regardless of lazy-load heights. The
+   resulting scroll event is suppressed so it can't overwrite the saved value. */
+function restoreScroll(deckId, depth) {
+    _suppressScrollReport = true;
+    if (deckId) {
+        var s = document.querySelector('[data-deck-id="' + deckId + '"]');
+        if (s) {
+            var top = s.getBoundingClientRect().top + window.scrollY;
+            window.scrollTo(0, Math.max(0, Math.round(top + depth)));
+        } else {
+            window.scrollTo(0, 0);
+        }
+    } else {
+        window.scrollTo(0, depth);
+    }
+    requestAnimationFrame(function() {
+        requestAnimationFrame(function() { _suppressScrollReport = false; });
+    });
 }
 """

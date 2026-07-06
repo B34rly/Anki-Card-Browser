@@ -1,4 +1,5 @@
 {
     "mode": "embedded",
-    "display_mode": "notes"
+    "display_mode": "cards",
+    "default_edit_mode": true
 }

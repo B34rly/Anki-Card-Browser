@@ -3,29 +3,6 @@ from __future__ import annotations
 from aqt import mw
 
 
-def get_leaf_decks() -> list[tuple[int, str]]:
-    """Return (deck_id, full_name) for every leaf deck (no children)."""
-    col = mw.col
-    if col is None:
-        return []
-
-    tree = col.decks.deck_tree()
-    leaves: list[tuple[int, str]] = []
-
-    def walk(node, parent_path: str = ""):
-        name = f"{parent_path}::{node.name}" if parent_path else node.name
-        if not node.children:
-            if node.deck_id != 0:  # skip the virtual root
-                leaves.append((node.deck_id, name))
-        for child in node.children:
-            walk(child, name)
-
-    # The root node returned by deck_tree() is virtual; iterate its children
-    for child in tree.children:
-        walk(child, "")
-    return leaves
-
-
 def get_top_level_decks() -> list[tuple[int, str]]:
     """Return (deck_id, name) for each top-level deck."""
     col = mw.col

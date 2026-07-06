@@ -6,38 +6,94 @@ and regex-based extraction of IO mask data from Anki's card answer HTML.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+
+# SQLite limits the number of host parameters per statement (default 999), so
+# `... WHERE c.id IN (?, ?, …)` queries are run over card ids in chunks.
+_CHUNK_SIZE = 500
+
+
+def _query_in_chunks(col, select_sql: str, card_ids: Sequence[int]) -> Iterator[tuple]:
+    """Yield rows for ``select_sql`` run over *card_ids* in chunks.
+
+    *select_sql* must contain a single ``{ph}`` placeholder for the
+    comma-separated ``?`` markers of the ``IN (...)`` clause.
+    """
+    for i in range(0, len(card_ids), _CHUNK_SIZE):
+        chunk = card_ids[i : i + _CHUNK_SIZE]
+        placeholders = ",".join("?" * len(chunk))
+        yield from col.db.all(select_sql.format(ph=placeholders), *chunk)
 
 
 def get_cards_metadata(col, card_ids: Sequence[int]) -> dict[int, dict]:
     """Bulk-fetch card metadata in one SQL query instead of N get_card() calls.
 
     Returns a dict keyed by card ID with keys:
-      cid, type, queue, due, nid, mid, factor, ivl, lapses, reps, flags, mod, sfld
+      cid, type, queue, due, nid, mid, did, factor, ivl, lapses, reps, flags,
+      mod, sfld
     """
     if not card_ids:
         return {}
-    # Process in chunks to avoid SQLite variable limit
     result: dict[int, dict] = {}
-    chunk_size = 500
-    for i in range(0, len(card_ids), chunk_size):
-        chunk = card_ids[i : i + chunk_size]
-        placeholders = ",".join("?" * len(chunk))
-        rows = col.db.all(
-            f"SELECT c.id, c.type, c.queue, c.due, c.nid, n.mid, "
-            f"c.factor, c.ivl, c.lapses, c.reps, c.flags, c.mod, n.sfld "
-            f"FROM cards c JOIN notes n ON c.nid = n.id "
-            f"WHERE c.id IN ({placeholders})",
-            *chunk,
+    rows = _query_in_chunks(
+        col,
+        "SELECT c.id, c.type, c.queue, c.due, c.nid, n.mid, c.did, "
+        "c.factor, c.ivl, c.lapses, c.reps, c.flags, c.mod, n.sfld "
+        "FROM cards c JOIN notes n ON c.nid = n.id "
+        "WHERE c.id IN ({ph})",
+        card_ids,
+    )
+    for r in rows:
+        result[r[0]] = {
+            "cid": r[0], "type": r[1], "queue": r[2],
+            "due": r[3], "nid": r[4], "mid": r[5],
+            "did": r[6], "factor": r[7], "ivl": r[8],
+            "lapses": r[9], "reps": r[10], "flags": r[11],
+            "mod": r[12], "sfld": r[13],
+        }
+    return result
+
+
+def get_card_decks(col, card_ids: Sequence[int]) -> dict[int, int]:
+    """Map card id → deck id for *card_ids* (one chunked query).
+
+    Cheaper than get_cards_metadata when only deck membership is needed.
+    """
+    if not card_ids:
+        return {}
+    return {
+        cid: did
+        for cid, did in _query_in_chunks(
+            col, "SELECT id, did FROM cards WHERE id IN ({ph})", card_ids
         )
-        for r in rows:
-            result[r[0]] = {
-                "cid": r[0], "type": r[1], "queue": r[2],
-                "due": r[3], "nid": r[4], "mid": r[5],
-                "factor": r[6], "ivl": r[7], "lapses": r[8],
-                "reps": r[9], "flags": r[10], "mod": r[11],
-                "sfld": r[12],
-            }
+    }
+
+
+def get_deck_cards(col, deck_ids: Sequence[int]) -> dict[int, int]:
+    """Map card id → deck id for every card in *deck_ids*.
+
+    Walks the indexed ``cards.did`` column, so it is far cheaper than looking
+    the same cards up by id (external-change membership diffing).
+    """
+    if not deck_ids:
+        return {}
+    return {
+        cid: did
+        for cid, did in _query_in_chunks(
+            col, "SELECT id, did FROM cards WHERE did IN ({ph})", deck_ids
+        )
+    }
+
+
+def get_note_cards(col, note_ids: Sequence[int]) -> dict[int, list[int]]:
+    """Map note id → [card ids] (one chunked query, not one call per note)."""
+    if not note_ids:
+        return {}
+    result: dict[int, list[int]] = {}
+    for cid, nid in _query_in_chunks(
+        col, "SELECT id, nid FROM cards WHERE nid IN ({ph}) ORDER BY ord", note_ids
+    ):
+        result.setdefault(nid, []).append(cid)
     return result
 
 
@@ -46,17 +102,13 @@ def get_flags_for_cards(col, card_ids: Sequence[int]) -> list[int]:
     if not card_ids:
         return []
     flag_set: set[int] = set()
-    chunk_size = 500
-    for i in range(0, len(card_ids), chunk_size):
-        chunk = card_ids[i : i + chunk_size]
-        placeholders = ",".join("?" * len(chunk))
-        rows = col.db.all(
-            f"SELECT DISTINCT c.flags FROM cards c "
-            f"WHERE c.id IN ({placeholders}) AND c.flags != 0",
-            *chunk,
-        )
-        for (f,) in rows:
-            flag_set.add(f)
+    for (f,) in _query_in_chunks(
+        col,
+        "SELECT DISTINCT c.flags FROM cards c "
+        "WHERE c.id IN ({ph}) AND c.flags != 0",
+        card_ids,
+    ):
+        flag_set.add(f)
     return sorted(flag_set)
 
 
@@ -73,20 +125,16 @@ def search_cards_by_content(col, card_ids: Sequence[int], query: str) -> list[in
         return list(card_ids)
     query_lower = query.lower()
     matched: list[int] = []
-    chunk_size = 500
-    for i in range(0, len(card_ids), chunk_size):
-        chunk = card_ids[i : i + chunk_size]
-        placeholders = ",".join("?" * len(chunk))
-        rows = col.db.all(
-            f"SELECT c.id, n.flds "
-            f"FROM cards c JOIN notes n ON c.nid = n.id "
-            f"WHERE c.id IN ({placeholders})",
-            *chunk,
-        )
-        for cid, flds in rows:
-            plain = _HTML_TAG_RE.sub("", flds).lower()
-            if query_lower in plain:
-                matched.append(cid)
+    for cid, flds in _query_in_chunks(
+        col,
+        "SELECT c.id, n.flds "
+        "FROM cards c JOIN notes n ON c.nid = n.id "
+        "WHERE c.id IN ({ph})",
+        card_ids,
+    ):
+        plain = _HTML_TAG_RE.sub("", flds).lower()
+        if query_lower in plain:
+            matched.append(cid)
     return matched
 
 
@@ -95,41 +143,17 @@ def get_tags_for_cards(col, card_ids: Sequence[int]) -> list[str]:
     if not card_ids:
         return []
     tag_set: set[str] = set()
-    chunk_size = 500
-    for i in range(0, len(card_ids), chunk_size):
-        chunk = card_ids[i : i + chunk_size]
-        placeholders = ",".join("?" * len(chunk))
-        rows = col.db.all(
-            f"SELECT DISTINCT n.tags "
-            f"FROM cards c JOIN notes n ON c.nid = n.id "
-            f"WHERE c.id IN ({placeholders})",
-            *chunk,
-        )
-        for (tags_str,) in rows:
-            for t in tags_str.strip().split():
-                if t:
-                    tag_set.add(t)
+    for (tags_str,) in _query_in_chunks(
+        col,
+        "SELECT DISTINCT n.tags "
+        "FROM cards c JOIN notes n ON c.nid = n.id "
+        "WHERE c.id IN ({ph})",
+        card_ids,
+    ):
+        for t in tags_str.strip().split():
+            if t:
+                tag_set.add(t)
     return sorted(tag_set, key=str.lower)
-
-
-def get_card_tags_map(col, card_ids: Sequence[int]) -> dict[int, list[str]]:
-    """Return {cid: [tag, ...]} for the given cards."""
-    if not card_ids:
-        return {}
-    result: dict[int, list[str]] = {}
-    chunk_size = 500
-    for i in range(0, len(card_ids), chunk_size):
-        chunk = card_ids[i : i + chunk_size]
-        placeholders = ",".join("?" * len(chunk))
-        rows = col.db.all(
-            f"SELECT c.id, n.tags "
-            f"FROM cards c JOIN notes n ON c.nid = n.id "
-            f"WHERE c.id IN ({placeholders})",
-            *chunk,
-        )
-        for cid, tags_str in rows:
-            result[cid] = [t for t in tags_str.strip().split() if t]
-    return result
 
 
 def filter_cards_by_tag(col, card_ids: Sequence[int], tag: str) -> list[int]:
@@ -138,25 +162,27 @@ def filter_cards_by_tag(col, card_ids: Sequence[int], tag: str) -> list[int]:
         return list(card_ids)
     tag_lower = tag.lower()
     matched: list[int] = []
-    chunk_size = 500
-    for i in range(0, len(card_ids), chunk_size):
-        chunk = card_ids[i : i + chunk_size]
-        placeholders = ",".join("?" * len(chunk))
-        rows = col.db.all(
-            f"SELECT c.id, n.tags "
-            f"FROM cards c JOIN notes n ON c.nid = n.id "
-            f"WHERE c.id IN ({placeholders})",
-            *chunk,
-        )
-        for cid, tags_str in rows:
-            tags = [t.lower() for t in tags_str.strip().split() if t]
-            if tag_lower in tags:
-                matched.append(cid)
+    for cid, tags_str in _query_in_chunks(
+        col,
+        "SELECT c.id, n.tags "
+        "FROM cards c JOIN notes n ON c.nid = n.id "
+        "WHERE c.id IN ({ph})",
+        card_ids,
+    ):
+        tags = [t.lower() for t in tags_str.strip().split() if t]
+        if tag_lower in tags:
+            matched.append(cid)
     return matched
 
 
-# Cache IO notetype lookups per model id
+# Cache IO notetype lookups per model id. Cleared on profile switch via
+# clear_caches() so model ids from a previous collection are never reused.
 _io_mid_cache: dict[int, bool] = {}
+
+
+def clear_caches() -> None:
+    """Reset module-level caches (call when the collection/profile changes)."""
+    _io_mid_cache.clear()
 
 
 def is_io_mid(col, mid: int) -> bool:
@@ -204,7 +230,7 @@ _MASK_RE = re.compile(
     r'(data-(?:ordinal|shape|left|top|width|height|rx|ry|angle|points|fill)="[^"]*"\s*)+',
     re.DOTALL,
 )
-_ATTR_RE = re.compile(r'data-(shape|left|top|width|height|rx|ry|angle|points|fill)="([^"]*)"')
+_ATTR_RE = re.compile(r'data-(ordinal|shape|left|top|width|height|rx|ry|angle|points|fill)="([^"]*)"')
 ACTIVE_ORDINAL_RE = re.compile(r'class="cloze"\s+data-ordinal="(\d+)"')
 _IMG_RE = re.compile(r'<img\s[^>]*src="([^"]*)"[^>]*/?\s*>')
 

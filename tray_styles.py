@@ -38,6 +38,32 @@ body {
     transition: transform 0.1s ease;
 }
 .card-frame.suspended { opacity: 0.45; }
+.card-frame.buried { opacity: 0.55; }
+
+/* ── Flag indicator + flag picker row ── */
+.card-flag {
+    width: 9px; height: 9px; border-radius: 50%;
+    flex-shrink: 0; display: inline-block;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.18);
+}
+.flag-row {
+    display: flex; gap: 5px; align-items: center;
+    padding: 6px 12px 4px;
+}
+/* Scoped under .card-menu so these win over the generic `.card-menu button`
+   item styling (which would otherwise stretch swatches to full-width blocks). */
+.card-menu .flag-swatch {
+    width: 16px; height: 16px; min-width: 0; margin: 0; padding: 0;
+    border-radius: 4px; line-height: 1; cursor: pointer;
+    border: 1px solid color-mix(in srgb, CanvasText 20%, Canvas);
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: transform 0.1s ease;
+}
+.card-menu .flag-swatch:hover { transform: scale(1.18); }
+.card-menu .flag-clear {
+    background: transparent; color: GrayText; font-size: 12px;
+}
+.card-menu .flag-clear:hover { color: CanvasText; }
 
 /* ── Card top bar (flex row: badge | tags | actions) ── */
 .card-top-bar {
@@ -102,14 +128,23 @@ body {
 
 /* ── Card dropdown menu ── */
 .card-menu {
-    display: none; position: absolute; top: 30px; right: 8px;
+    display: none; position: absolute; top: 28px; right: 8px;
     background: Canvas; color: CanvasText;
     border: 1px solid color-mix(in srgb, CanvasText 18%, Canvas); border-radius: 6px;
     box-shadow: 0 6px 20px rgba(0,0,0,0.18); z-index: 100;
-    min-width: 160px; overflow: hidden;
+    min-width: 168px; max-height: 80vh; overflow-y: auto;
     padding: 4px 0;
 }
 .card-menu.open { display: block; }
+/* Anchor above the button when there isn't room below. */
+.card-menu.flip-up { top: auto; bottom: calc(100% - 28px); }
+/* While a menu is open, stop the frame clipping/scaling it and lift it above
+   neighbouring cards (the frame's overflow:hidden would otherwise crop the menu). */
+.card-frame.menu-open {
+    overflow: visible !important; transform: none !important;
+    transition: none !important;  /* un-scale instantly so menu measurement is accurate */
+    z-index: 60;
+}
 .card-menu button {
     display: block; width: 100%; padding: 7px 14px;
     border: none; background: none; text-align: left;
@@ -261,6 +296,10 @@ body.overlay-open { overflow: hidden; padding-right: var(--scrollbar-w, 0px); }
     padding: 4px 0;
 }
 .plus-menu.open { display: block; }
+/* The fixed menu lives inside a sticky .deck-header (its own stacking context),
+   so lift that header above sibling headers while open or the menu is painted
+   beneath the next header — unclickable over empty decks. */
+.deck-header.plus-open { z-index: 150; }
 .plus-menu button {
     display: block; width: 100%; padding: 7px 14px;
     border: none; background: none; text-align: left;
@@ -286,7 +325,19 @@ body.view-mode .edit-card-btn {
     opacity: 0; visibility: hidden;
     pointer-events: none;
 }
+/* View mode is read-only: hide the card action (3-dot) menu too, so the
+   mutating actions (flag, suspend, bury, forget, set due, tags, change deck…)
+   are only reachable in edit mode. */
+body.view-mode .card-menu-btn {
+    opacity: 0; visibility: hidden;
+    pointer-events: none;
+}
 body.view-mode .edit-only {
+    display: none;
+}
+/* The root header only holds the edit-mode "+" button; collapse the otherwise
+   empty bar in view mode so it leaves no reserved gap above the cards. */
+body.view-mode .root-header {
     display: none;
 }
 .card-menu-sep {
@@ -294,6 +345,7 @@ body.view-mode .edit-only {
     margin: 4px 0;
 }
 .card-menu-danger { color: #c0392b !important; }
+.card-menu-danger:hover { background: color-mix(in srgb, #c0392b 10%, Canvas) !important; }
 
 /* ── Note group blocks (notes mode) ── */
 .note-group { cursor: pointer; }
@@ -346,7 +398,6 @@ body.view-mode .edit-only {
     transition: color 0.15s;
 }
 .note-cards-toggle:hover { color: CanvasText; }
-.note-cards-toggle.expanded { }
 
 /* Individual cards within a note group */
 .note-cards-body {
@@ -373,7 +424,6 @@ body.view-mode .edit-only {
     margin-top: 12px; padding-top: 12px;
     border-top: 1px solid color-mix(in srgb, CanvasText 8%, Canvas);
 }
-.card-menu-danger:hover { background: color-mix(in srgb, #c0392b 10%, Canvas) !important; }
 
 /* ── Card state indicators ── */
 .card-frame.state-new          { border-bottom: 3px solid var(--state-new-color); }
@@ -432,7 +482,7 @@ body.view-mode .edit-only {
     .card-frame:hover {
         box-shadow: 0 2px 16px rgba(0,0,0,0.35);
     }
-    .card-menu, .deck-ctx-menu {
+    .card-menu {
         box-shadow: 0 6px 24px rgba(0,0,0,0.4);
     }
     #overlay-card {

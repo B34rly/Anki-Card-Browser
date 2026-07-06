@@ -8,11 +8,36 @@ from __future__ import annotations
 import re
 from html import escape as _esc
 
-from .card_state import build_state_badge
+from anki.cards import CardId
+from anki.consts import (
+    QUEUE_TYPE_SUSPENDED,
+    QUEUE_TYPE_MANUALLY_BURIED,
+    QUEUE_TYPE_SIBLING_BURIED,
+    QUEUE_TYPE_NEW,
+    CARD_TYPE_NEW,
+)
+
+from .card_state import (
+    build_state_badge,
+    card_state_from_meta,
+    card_countdown_from_meta,
+)
 
 # ── Cloze marker styling ──
 _CLOZE_RE = re.compile(r'\{\{c(\d+)::(.+?)(?:::(.+?))?\}\}', re.DOTALL)
 _HTML_STRIP_RE = re.compile(r'<[^>]+>')
+
+
+def frame_classes(state: str, suspended: bool, buried: bool = False, *extra: str) -> str:
+    """Class list for a card frame; suspended outranks buried, then the state."""
+    parts = ["card-frame", *extra]
+    if suspended:
+        parts.append("suspended")
+    elif buried:
+        parts.append("buried")
+    if state:
+        parts.append(f"state-{state}")
+    return " ".join(parts)
 
 
 def build_tag_strip(tags: list[str]) -> str:
@@ -21,6 +46,80 @@ def build_tag_strip(tags: list[str]) -> str:
         return ""
     pills = " ".join(f'<span class="card-tag">{_esc(t)}</span>' for t in tags)
     return f'<div class="card-tag-strip">{pills}</div>'
+
+
+# Flag colours (1-7) matching Anki's flag palette.
+FLAG_COLORS = {
+    1: "#e74c3c", 2: "#e67e22", 3: "#2ecc71", 4: "#3498db",
+    5: "#e84393", 6: "#1abc9c", 7: "#9b59b6",
+}
+
+
+def build_flag_indicator(flag: int) -> str:
+    """Build a small coloured dot showing a card's flag (empty if unflagged)."""
+    color = FLAG_COLORS.get(flag)
+    if not color:
+        return ""
+    return f'<span class="card-flag" style="background:{color}" title="Flag {flag}"></span>'
+
+
+def build_flag_row(cids_str: str) -> str:
+    """Build the row of flag swatches (1-7 + clear) for a card menu."""
+    swatches = "".join(
+        f'<button class="flag-swatch" style="background:{c}" title="Flag {n}" '
+        f'onclick="cardAction(event,\'flag_{n}\',\'{cids_str}\')"></button>'
+        for n, c in FLAG_COLORS.items()
+    )
+    return (
+        f'<div class="flag-row">{swatches}'
+        f'<button class="flag-swatch flag-clear" title="Clear flag" '
+        f'onclick="cardAction(event,\'flag_0\',\'{cids_str}\')">✕</button>'
+        f'</div>'
+    )
+
+
+def build_card_menu(
+    cids_str: str,
+    *,
+    suspended: bool,
+    buried: bool,
+    is_group: bool,
+    can_reposition: bool,
+    delete_label: str,
+) -> str:
+    """Build the inner buttons of a card / group dropdown menu.
+
+    All actions operate on *cids_str* (a comma-separated card-id list), so the
+    same menu serves single cards, IO groups and note groups.
+    """
+    suffix = " all" if is_group else ""
+    susp_action = "unsuspend" if suspended else "suspend"
+    susp_label = ("Unsuspend" if suspended else "Suspend") + suffix
+    bury_action = "unbury" if buried else "bury"
+    bury_label = ("Unbury" if buried else "Bury") + suffix
+    bury_btn = f'<button onclick="cardAction(event,\'{bury_action}\',\'{cids_str}\')">{bury_label}</button>'
+
+    reposition_btn = (
+        f'<button onclick="cardAction(event,\'reposition\',\'{cids_str}\')">Reposition…</button>'
+        if can_reposition else ""
+    )
+
+    return (
+        f'{build_flag_row(cids_str)}'
+        f'<hr class="card-menu-sep">'
+        f'<button onclick="cardAction(event,\'{susp_action}\',\'{cids_str}\')">{susp_label}</button>'
+        f'{bury_btn}'
+        f'<button onclick="cardAction(event,\'review_now\',\'{cids_str}\')">Review{suffix} now</button>'
+        f'<button onclick="cardAction(event,\'set_due\',\'{cids_str}\')">Set due date…</button>'
+        f'<button onclick="cardAction(event,\'forget\',\'{cids_str}\')">Forget{suffix}</button>'
+        f'{reposition_btn}'
+        f'<hr class="card-menu-sep">'
+        f'<button onclick="cardAction(event,\'add_tag\',\'{cids_str}\')">Add tag…</button>'
+        f'<button onclick="cardAction(event,\'remove_tag\',\'{cids_str}\')">Remove tag…</button>'
+        f'<button onclick="cardAction(event,\'change_deck\',\'{cids_str}\')">Change deck…</button>'
+        f'<hr class="card-menu-sep">'
+        f'<button class="card-menu-danger edit-only" onclick="deleteCard(event,\'{cids_str}\')">{delete_label}</button>'
+    )
 
 
 def build_svg_mask(mask: dict, suspended: bool = False) -> str:
@@ -66,18 +165,13 @@ def build_io_card_html(
     state: str = "",
     countdown: str = "",
     tags: list[str] | None = None,
+    all_buried: bool = False,
+    flag: int = 0,
 ) -> str:
     """Build a single grouped IO card with image + SVG mask overlay."""
-    cls_parts = ["card-frame"]
-    if all_suspended:
-        cls_parts.append("suspended")
-    if state:
-        cls_parts.append(f"state-{state}")
-    cls = " ".join(cls_parts)
+    cls = frame_classes(state, all_suspended, all_buried)
     cids_str = ",".join(str(c) for c in card_ids)
     menu_id = card_ids[0]
-    toggle_action = "unsuspend_group" if all_suspended else "suspend_group"
-    toggle_label = "Unsuspend all" if all_suspended else "Suspend all"
 
     svg_shapes = "\n".join(
         build_svg_mask(m, suspended=m.get("ordinal", "") in suspended_ordinals)
@@ -85,11 +179,13 @@ def build_io_card_html(
     )
 
     badge = build_state_badge(state, countdown)
+    flag_html = build_flag_indicator(flag)
     tag_strip = build_tag_strip(tags or [])
 
     return (
         f'<div class="{cls}" data-cid="{menu_id}" onclick="expandCard(this)">'
         f'  <div class="card-top-bar">'
+        f'    {flag_html}'
         f'    {badge}'
         f'    {tag_strip}'
         f'    <div class="card-actions">'
@@ -97,11 +193,8 @@ def build_io_card_html(
         f'      <button class="card-menu-btn" onclick="toggleMenu(event,\'{menu_id}\')">&#8942;</button>'
         f'    </div>'
         f'  </div>'
-        f'  <div class="card-menu" id="menu-{menu_id}">'
-        f'    <button onclick="cardAction(event,\'{toggle_action}\',\'{cids_str}\')">{toggle_label}</button>'
-        f'    <button onclick="cardAction(event,\'review_now_group\',\'{cids_str}\')">Review all now</button>'
-        f'    <hr class="card-menu-sep">'
-        f'    <button class="card-menu-danger edit-only" onclick="deleteCard(event,\'{cids_str}\')">Delete cards</button>'
+        f'  <div class="card-menu" id="menu-{menu_id}" onclick="event.stopPropagation()">'
+        f'    {build_card_menu(cids_str, suspended=all_suspended, buried=all_buried, is_group=True, can_reposition=False, delete_label="Delete cards")}'
         f'  </div>'
         f'  <div class="card-content">'
         f'    <div class="io-container">'
@@ -118,35 +211,31 @@ def build_io_card_html(
 
 def render_normal_card(col, cid: int) -> str:
     """Render full card HTML for a single non-IO card (called during lazy load)."""
-    from anki.cards import CardId
-    from anki.consts import QUEUE_TYPE_SUSPENDED
-    from .card_state import card_state_from_meta, card_countdown_from_meta
-
     card = col.get_card(CardId(cid))
     suspended = card.queue == QUEUE_TYPE_SUSPENDED
+    buried = card.queue in (QUEUE_TYPE_MANUALLY_BURIED, QUEUE_TYPE_SIBLING_BURIED)
+    is_new = card.queue == QUEUE_TYPE_NEW or card.type == CARD_TYPE_NEW
     m = {"queue": card.queue, "type": card.type, "due": card.due}
     state = card_state_from_meta(m, col.sched.today)
     countdown = card_countdown_from_meta(m, col.sched.today)
+    cls = frame_classes(state, suspended, buried)
 
-    cls_parts = ["card-frame"]
-    if suspended:
-        cls_parts.append("suspended")
-    if state:
-        cls_parts.append(f"state-{state}")
-    cls = " ".join(cls_parts)
-
-    toggle_label = "Unsuspend" if suspended else "Suspend"
-    toggle_action = "unsuspend" if suspended else "suspend"
     answer_html = card.answer()
     badge = build_state_badge(state, countdown)
+    flag_html = build_flag_indicator(card.user_flag())
     try:
         tags = card.note().tags
     except Exception:
         tags = []
     tag_strip = build_tag_strip(tags)
+    menu = build_card_menu(
+        str(cid), suspended=suspended, buried=buried, is_group=False,
+        can_reposition=is_new, delete_label="Delete card",
+    )
     return (
         f'<div class="{cls}" data-cid="{cid}" onclick="expandCard(this)">'
         f'  <div class="card-top-bar">'
+        f'    {flag_html}'
         f'    {badge}'
         f'    {tag_strip}'
         f'    <div class="card-actions">'
@@ -154,11 +243,8 @@ def render_normal_card(col, cid: int) -> str:
         f'      <button class="card-menu-btn" onclick="toggleMenu(event,{cid})">&#8942;</button>'
         f'    </div>'
         f'  </div>'
-        f'  <div class="card-menu" id="menu-{cid}">'
-        f'    <button onclick="cardAction(event,\'{toggle_action}\',{cid})">{toggle_label}</button>'
-        f'    <button onclick="cardAction(event,\'review_now\',{cid})">Review now</button>'
-        f'    <hr class="card-menu-sep">'
-        f'    <button class="card-menu-danger edit-only" onclick="deleteCard(event,{cid})">Delete card</button>'
+        f'  <div class="card-menu" id="menu-{cid}" onclick="event.stopPropagation()">'
+        f'    {menu}'
         f'  </div>'
         f'  <div class="card-content">{answer_html}</div>'
         f'</div>'
@@ -255,25 +341,20 @@ def build_note_group_html(
     card_names: list[tuple[int, str]],
     summary: dict,
     tags: list[str] | None = None,
+    flag: int = 0,
 ) -> str:
     """Build full HTML for a multi-card note group block."""
     state = summary["dominant_state"]
     countdown = summary["dominant_countdown"]
     all_suspended = summary["all_suspended"]
-
-    cls_parts = ["card-frame", "note-group"]
-    if all_suspended:
-        cls_parts.append("suspended")
-    if state:
-        cls_parts.append(f"state-{state}")
-    cls = " ".join(cls_parts)
+    all_buried = summary.get("all_buried", False)
+    cls = frame_classes(state, all_suspended, all_buried, "note-group")
 
     lead_cid = card_ids[0]
     cids_str = ",".join(str(c) for c in card_ids)
-    toggle_action = "unsuspend_group" if all_suspended else "suspend_group"
-    toggle_label = "Unsuspend all" if all_suspended else "Suspend all"
 
     badge = build_state_badge(state, countdown)
+    flag_html = build_flag_indicator(flag)
     tag_strip = build_tag_strip(tags or [])
     count_html = build_note_card_count(summary)
 
@@ -281,32 +362,36 @@ def build_note_group_html(
     card_names_str = "|".join(f"{cid}:{_esc(name)}" for cid, name in card_names)
 
     n_cards = len(card_ids)
+    # The container is identified by data-group-lead = lead_cid, which is unique
+    # per render (each lead cid appears once) even when one note has cards in two
+    # different deck sections. A distinct attribute (not data-cid) also avoids
+    # colliding with the expanded list's lead card (data-cid=lead_cid). Group-
+    # level refresh/delete target it via replaceGroup/removeGroup(lead_cid).
+    gk = lead_cid
     return (
-        f'<div class="{cls}" data-cid="{lead_cid}" data-nid="{nid}"'
+        f'<div class="{cls}" data-group-lead="{gk}" data-nid="{nid}"'
         f' data-card-ids="{cids_str}" data-card-names="{card_names_str}"'
         f' onclick="expandNoteGroup(this)">'
         f'  <div class="card-top-bar">'
+        f'    {flag_html}'
         f'    {badge}'
         f'    {count_html}'
         f'    {tag_strip}'
         f'    <div class="card-actions">'
         f'      <button class="edit-card-btn" onclick="editCard(event,{lead_cid})" title="Edit note">&#9998;</button>'
-        f'      <button class="card-menu-btn" onclick="toggleMenu(event,\'{lead_cid}\')" >&#8942;</button>'
+        f'      <button class="card-menu-btn" onclick="toggleMenu(event,\'grp-{gk}\')" >&#8942;</button>'
         f'    </div>'
         f'  </div>'
-        f'  <div class="card-menu" id="menu-{lead_cid}">'
-        f'    <button onclick="cardAction(event,\'{toggle_action}\',\'{cids_str}\')">{toggle_label}</button>'
-        f'    <button onclick="cardAction(event,\'review_now_group\',\'{cids_str}\')">Review all now</button>'
-        f'    <hr class="card-menu-sep">'
-        f'    <button class="card-menu-danger edit-only" onclick="deleteCard(event,\'{cids_str}\')">Delete note</button>'
+        f'  <div class="card-menu" id="menu-grp-{gk}" onclick="event.stopPropagation()">'
+        f'    {build_card_menu(cids_str, suspended=all_suspended, buried=all_buried, is_group=True, can_reposition=False, delete_label="Delete note")}'
         f'  </div>'
         f'  <div class="card-content">'
         f'    {fields_table}'
         f'  </div>'
-        f'  <div class="note-cards-toggle" onclick="toggleNoteCards(event,{nid})">'
+        f'  <div class="note-cards-toggle" onclick="toggleNoteCards(event,{gk})">'
         f'    Show {n_cards} cards &#9656;'
         f'  </div>'
-        f'  <div class="note-cards-body" id="note-cards-{nid}">'
+        f'  <div class="note-cards-body" id="note-cards-{gk}">'
         f'  </div>'
         f'</div>'
     )

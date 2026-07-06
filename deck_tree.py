@@ -6,10 +6,15 @@ from aqt.qt import (
     QTreeWidget,
     QTreeWidgetItem,
     QMenu,
-    QInputDialog,
-    QMessageBox,
     Qt,
     pyqtSignal,
+)
+
+from .deck_ops import (
+    open_add_cards,
+    prompt_new_subdeck,
+    prompt_rename_deck,
+    confirm_delete_deck,
 )
 
 
@@ -95,9 +100,6 @@ class DeckTree(QWidget):
         if deck_id is None:
             return
 
-        from aqt import mw
-        from anki.decks import DeckId
-
         menu = QMenu(self)
         add_card_action = menu.addAction("Add card\u2026")
         add_child_action = menu.addAction("Add child subdeck\u2026")
@@ -106,52 +108,25 @@ class DeckTree(QWidget):
         if "::" in full_name:
             add_sibling_action = menu.addAction("Add sibling subdeck\u2026")
         menu.addSeparator()
+        rename_action = menu.addAction("Rename deck\u2026")
         delete_action = menu.addAction("Delete deck\u2026")
         chosen = menu.exec(self._tree.viewport().mapToGlobal(pos))
 
-        col = mw.col
-        if col is None:
-            return
-
         if chosen == add_card_action:
-            col.decks.set_current(DeckId(int(deck_id)))
-            from aqt.addcards import AddCards
-            add = AddCards(mw)
-            add.show()
+            open_add_cards(int(deck_id))
         elif chosen == add_child_action:
-            name, ok = QInputDialog.getText(
-                self, "New Subdeck", f"Subdeck name under {full_name}:"
-            )
-            if ok and name.strip():
-                col.decks.id(f"{full_name}::{name.strip()}")
+            if prompt_new_subdeck(self, full_name):
                 self.subdeck_created.emit()
         elif add_sibling_action and chosen == add_sibling_action:
             parent_name = "::".join(full_name.split("::")[:-1])
-            name, ok = QInputDialog.getText(
-                self, "New Sibling Subdeck", f"Subdeck name under {parent_name}:"
-            )
-            if ok and name.strip():
-                col.decks.id(f"{parent_name}::{name.strip()}")
+            if prompt_new_subdeck(self, parent_name, title="New Sibling Subdeck"):
+                self.subdeck_created.emit()
+        elif chosen == rename_action:
+            if prompt_rename_deck(self, int(deck_id)):
                 self.subdeck_created.emit()
         elif chosen == delete_action:
-            own_cids = col.decks.cids(DeckId(int(deck_id)), children=False)
-            deck = col.decks.get(DeckId(int(deck_id)))
-            children = col.decks.children(DeckId(int(deck_id))) if deck else []
-            if own_cids or children:
-                QMessageBox.warning(
-                    self, "Cannot Delete",
-                    f"The deck \"{full_name}\" is not empty.\n\n"
-                    "Move or delete all cards and child subdecks first.",
-                )
-            else:
-                confirm = QMessageBox.question(
-                    self, "Delete Deck",
-                    f"Are you sure you want to delete \"{full_name}\"?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                )
-                if confirm == QMessageBox.StandardButton.Yes:
-                    col.decks.remove([DeckId(int(deck_id))])
-                    self.subdeck_created.emit()
+            if confirm_delete_deck(self, int(deck_id)):
+                self.subdeck_created.emit()
 
     def highlight_deck(self, deck_id: int) -> None:
         """Select the tree item for *deck_id* without emitting signals."""

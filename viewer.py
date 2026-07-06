@@ -18,12 +18,11 @@ from aqt.qt import (
     QIcon,
     QPixmap,
     QTimer,
-    QSizePolicy,
     Qt,
 )
 
+from .card_data import get_note_cards
 from .card_tray import CardTray
-from .card_state import FILTER_CHIP_STATES, SORT_KEYS
 from .deck_tree import DeckTree
 from .decks import get_top_level_decks, find_deck_node
 
@@ -186,6 +185,22 @@ _SVG_EDIT = (
     '<path d="M12 20h9"/>'
     '<path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>'
 )
+_SVG_REFRESH = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" '
+    'fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>'
+    '<path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>'
+    '</svg>'
+)
+_SVG_ARROW_DOWN = '<path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/>'
+_SVG_ARROW_UP = '<path d="M12 19V5"/><path d="M5 12l7-7 7 7"/>'
+
+
+def _svg_icon(svg: str) -> QIcon:
+    """Build a QIcon from an inline SVG string."""
+    pm = QPixmap()
+    pm.loadFromData(svg.encode("utf-8"))
+    return QIcon(pm)
 
 
 class CardBrowserWidget(QWidget):
@@ -198,6 +213,13 @@ class CardBrowserWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setStyleSheet(_QSS)
+
+        # ── Config (normalised so bad values fall back to documented defaults) ──
+        conf = mw.addonManager.getConfig(__name__.split(".")[0]) or {}
+        display_mode = conf.get("display_mode", "cards")
+        if display_mode not in ("cards", "notes"):
+            display_mode = "cards"
+        self._default_edit_mode = bool(conf.get("default_edit_mode", True))
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -216,7 +238,7 @@ class CardBrowserWidget(QWidget):
         left_layout.addWidget(self._combo, 0)
 
         # Search bar + view/edit toggle on one row
-        self._edit_mode = False
+        self._edit_mode = self._default_edit_mode
         search_row = QHBoxLayout()
         search_row.setContentsMargins(0, 0, 0, 0)
         search_row.setSpacing(4)
@@ -244,9 +266,6 @@ class CardBrowserWidget(QWidget):
         self._deck_tree.deck_selected.connect(self._on_tree_deck_selected)
         self._deck_tree.subdeck_created.connect(self._refresh_current_deck)
         left_layout.addWidget(self._deck_tree, 1)
-
-        # Will be connected after tray is created
-        self._tray_signal_connected = False
 
         # ── Splitter: left panel | card tray ──
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -349,10 +368,6 @@ class CardBrowserWidget(QWidget):
         self._filter_panel.setVisible(False)
         right_layout.addWidget(self._filter_panel)
 
-        # ── Read display mode from config ──
-        conf = mw.addonManager.getConfig(__name__.split(".")[0]) or {}
-        display_mode = conf.get("display_mode", "cards")
-
         self.tray = CardTray(display_mode=display_mode)
         self.tray.visible_section_changed.connect(self._on_visible_section)
         self.tray.subdeck_created.connect(self._refresh_current_deck)
@@ -368,6 +383,14 @@ class CardBrowserWidget(QWidget):
 
         outer.addWidget(self._splitter)
 
+        # Apply the default View/Edit mode now that the tray + deck tree exist
+        # (setChecked is signal-blocked, then applied explicitly to avoid both a
+        # missed apply when already unchecked and a double-apply when toggled).
+        self._mode_btn.blockSignals(True)
+        self._mode_btn.setChecked(self._edit_mode)
+        self._mode_btn.blockSignals(False)
+        self._on_mode_toggled(self._edit_mode)
+
         # Populate after the event loop starts
         QTimer.singleShot(0, self._populate_combo)
 
@@ -376,16 +399,33 @@ class CardBrowserWidget(QWidget):
 
     # ── Dropdown ──
 
-    def _populate_combo(self) -> None:
+    def _populate_combo(self, force_render: bool = False) -> None:
+        """(Re)populate the top-level deck dropdown.
+
+        Preserves the current selection and only re-renders when the selected
+        deck actually changes (or nothing has been rendered yet), so reopening
+        the embedded browser keeps the deck and scroll position. Pass
+        *force_render* for deck-structure changes (a rename keeps the same deck
+        id but still needs a re-render).
+        """
+        prev = self._combo.currentData()
         self._combo.blockSignals(True)
         self._combo.clear()
         for deck_id, name in get_top_level_decks():
             self._combo.addItem(name, userData=deck_id)
+        target = 0
+        if prev is not None:
+            idx = self._combo.findData(prev)
+            if idx >= 0:
+                target = idx
+        if self._combo.count() > 0:
+            self._combo.setCurrentIndex(target)
         self._combo.blockSignals(False)
 
         if self._combo.count() > 0:
-            self._combo.setCurrentIndex(0)
-            self._on_deck_changed(0)
+            new_data = self._combo.itemData(target)
+            if force_render or new_data != prev or self.tray._tree_root is None:
+                self._on_deck_changed(target)
 
     def _on_deck_changed(self, index: int) -> None:
         deck_id = self._combo.itemData(index)
@@ -447,85 +487,10 @@ class CardBrowserWidget(QWidget):
         self._flag_combo.currentIndexChanged.connect(self._apply_filters)
         form.addRow("Flag:", self._flag_combo)
 
-        # Ease range
-        ease_row = QHBoxLayout()
-        ease_row.setSpacing(4)
-        self._ease_min = QSpinBox()
-        self._ease_min.setRange(0, 999)
-        self._ease_min.setValue(0)
-        self._ease_min.setSuffix("%")
-        self._ease_min.setSpecialValueText("Min")
-        self._ease_min.editingFinished.connect(self._apply_filters)
-        ease_row.addWidget(self._ease_min)
-        ease_row.addWidget(QLabel("\u2013"))
-        self._ease_max = QSpinBox()
-        self._ease_max.setRange(0, 999)
-        self._ease_max.setValue(0)
-        self._ease_max.setSuffix("%")
-        self._ease_max.setSpecialValueText("Max")
-        self._ease_max.editingFinished.connect(self._apply_filters)
-        ease_row.addWidget(self._ease_max)
-        ease_row.addStretch()
-        form.addRow("Ease:", ease_row)
-
-        # Interval range
-        ivl_row = QHBoxLayout()
-        ivl_row.setSpacing(4)
-        self._ivl_min = QSpinBox()
-        self._ivl_min.setRange(0, 99999)
-        self._ivl_min.setValue(0)
-        self._ivl_min.setSuffix(" d")
-        self._ivl_min.setSpecialValueText("Min")
-        self._ivl_min.editingFinished.connect(self._apply_filters)
-        ivl_row.addWidget(self._ivl_min)
-        ivl_row.addWidget(QLabel("\u2013"))
-        self._ivl_max = QSpinBox()
-        self._ivl_max.setRange(0, 99999)
-        self._ivl_max.setValue(0)
-        self._ivl_max.setSuffix(" d")
-        self._ivl_max.setSpecialValueText("Max")
-        self._ivl_max.editingFinished.connect(self._apply_filters)
-        ivl_row.addWidget(self._ivl_max)
-        ivl_row.addStretch()
-        form.addRow("Interval:", ivl_row)
-
-        # Lapses range
-        lapse_row = QHBoxLayout()
-        lapse_row.setSpacing(4)
-        self._lapse_min = QSpinBox()
-        self._lapse_min.setRange(0, 99999)
-        self._lapse_min.setValue(0)
-        self._lapse_min.setSpecialValueText("Min")
-        self._lapse_min.editingFinished.connect(self._apply_filters)
-        lapse_row.addWidget(self._lapse_min)
-        lapse_row.addWidget(QLabel("\u2013"))
-        self._lapse_max = QSpinBox()
-        self._lapse_max.setRange(0, 99999)
-        self._lapse_max.setValue(0)
-        self._lapse_max.setSpecialValueText("Max")
-        self._lapse_max.editingFinished.connect(self._apply_filters)
-        lapse_row.addWidget(self._lapse_max)
-        lapse_row.addStretch()
-        form.addRow("Lapses:", lapse_row)
-
-        # Reviews range
-        reps_row = QHBoxLayout()
-        reps_row.setSpacing(4)
-        self._reps_min = QSpinBox()
-        self._reps_min.setRange(0, 99999)
-        self._reps_min.setValue(0)
-        self._reps_min.setSpecialValueText("Min")
-        self._reps_min.editingFinished.connect(self._apply_filters)
-        reps_row.addWidget(self._reps_min)
-        reps_row.addWidget(QLabel("\u2013"))
-        self._reps_max = QSpinBox()
-        self._reps_max.setRange(0, 99999)
-        self._reps_max.setValue(0)
-        self._reps_max.setSpecialValueText("Max")
-        self._reps_max.editingFinished.connect(self._apply_filters)
-        reps_row.addWidget(self._reps_max)
-        reps_row.addStretch()
-        form.addRow("Reviews:", reps_row)
+        self._ease_min, self._ease_max = self._add_range_row(form, "Ease:", 999, "%")
+        self._ivl_min, self._ivl_max = self._add_range_row(form, "Interval:", 99999, " d")
+        self._lapse_min, self._lapse_max = self._add_range_row(form, "Lapses:", 99999)
+        self._reps_min, self._reps_max = self._add_range_row(form, "Reviews:", 99999)
 
         # Clear all button
         clear_row = QHBoxLayout()
@@ -537,6 +502,29 @@ class CardBrowserWidget(QWidget):
         form.addRow("", clear_row)
 
         return panel
+
+    def _add_range_row(
+        self, form: QFormLayout, label: str, maximum: int, suffix: str = ""
+    ) -> tuple[QSpinBox, QSpinBox]:
+        """Add a min–max spinbox row to the filter panel; 0 means 'no limit'."""
+        row = QHBoxLayout()
+        row.setSpacing(4)
+        boxes: list[QSpinBox] = []
+        for special in ("Min", "Max"):
+            sb = QSpinBox()
+            sb.setRange(0, maximum)
+            sb.setValue(0)
+            if suffix:
+                sb.setSuffix(suffix)
+            sb.setSpecialValueText(special)
+            sb.editingFinished.connect(self._apply_filters)
+            boxes.append(sb)
+        row.addWidget(boxes[0])
+        row.addWidget(QLabel("–"))
+        row.addWidget(boxes[1])
+        row.addStretch()
+        form.addRow(label, row)
+        return boxes[0], boxes[1]
 
     def _toggle_filter_panel(self) -> None:
         vis = not self._filter_panel.isVisible()
@@ -575,31 +563,21 @@ class CardBrowserWidget(QWidget):
         self._flag_combo.blockSignals(False)
 
     def _build_criteria(self) -> dict:
-        """Gather advanced filter criteria from the panel widgets."""
+        """Gather advanced filter criteria from the panel widgets (0 = no limit)."""
         criteria: dict = {}
         flag = self._flag_combo.currentData()
         if flag:
             criteria["flag"] = flag
-        # Ease (convert from % to permille): 0 means "no limit"
-        if self._ease_min.value() > 0:
-            criteria["min_ease"] = self._ease_min.value() * 10
-        if self._ease_max.value() > 0:
-            criteria["max_ease"] = self._ease_max.value() * 10
-        # Interval
-        if self._ivl_min.value() > 0:
-            criteria["min_ivl"] = self._ivl_min.value()
-        if self._ivl_max.value() > 0:
-            criteria["max_ivl"] = self._ivl_max.value()
-        # Lapses
-        if self._lapse_min.value() > 0:
-            criteria["min_lapses"] = self._lapse_min.value()
-        if self._lapse_max.value() > 0:
-            criteria["max_lapses"] = self._lapse_max.value()
-        # Reviews
-        if self._reps_min.value() > 0:
-            criteria["min_reps"] = self._reps_min.value()
-        if self._reps_max.value() > 0:
-            criteria["max_reps"] = self._reps_max.value()
+        ranges = (
+            # Ease is entered as % but filtered in permille, hence the ×10.
+            ("min_ease", self._ease_min, 10), ("max_ease", self._ease_max, 10),
+            ("min_ivl", self._ivl_min, 1), ("max_ivl", self._ivl_max, 1),
+            ("min_lapses", self._lapse_min, 1), ("max_lapses", self._lapse_max, 1),
+            ("min_reps", self._reps_min, 1), ("max_reps", self._reps_max, 1),
+        )
+        for key, sb, mult in ranges:
+            if sb.value() > 0:
+                criteria[key] = sb.value() * mult
         return criteria
 
     def _build_filter_summary(self, criteria: dict, tag_filter: str) -> str:
@@ -609,42 +587,22 @@ class CardBrowserWidget(QWidget):
             parts.append(f"Tag: {tag_filter}")
         if criteria.get("flag"):
             parts.append(f"Flag: {FLAG_NAMES.get(criteria['flag'], '?')}")
-        if criteria.get("min_ease") or criteria.get("max_ease"):
-            lo = criteria.get("min_ease", 0) // 10
-            hi = criteria.get("max_ease", 0) // 10
+        ranges = (
+            # (label, min key, max key, unit, divisor back to display units)
+            ("Ease", "min_ease", "max_ease", "%", 10),
+            ("Ivl", "min_ivl", "max_ivl", "d", 1),
+            ("Lapses", "min_lapses", "max_lapses", "", 1),
+            ("Reps", "min_reps", "max_reps", "", 1),
+        )
+        for label, lo_key, hi_key, unit, div in ranges:
+            lo = criteria.get(lo_key, 0) // div
+            hi = criteria.get(hi_key, 0) // div
             if lo and hi:
-                parts.append(f"Ease: {lo}\u2013{hi}%")
+                parts.append(f"{label}: {lo}\u2013{hi}{unit}")
             elif lo:
-                parts.append(f"Ease \u2265 {lo}%")
-            else:
-                parts.append(f"Ease \u2264 {hi}%")
-        if criteria.get("min_ivl") or criteria.get("max_ivl"):
-            lo = criteria.get("min_ivl", 0)
-            hi = criteria.get("max_ivl", 0)
-            if lo and hi:
-                parts.append(f"Ivl: {lo}\u2013{hi}d")
-            elif lo:
-                parts.append(f"Ivl \u2265 {lo}d")
-            else:
-                parts.append(f"Ivl \u2264 {hi}d")
-        if criteria.get("min_lapses") or criteria.get("max_lapses"):
-            lo = criteria.get("min_lapses", 0)
-            hi = criteria.get("max_lapses", 0)
-            if lo and hi:
-                parts.append(f"Lapses: {lo}\u2013{hi}")
-            elif lo:
-                parts.append(f"Lapses \u2265 {lo}")
-            else:
-                parts.append(f"Lapses \u2264 {hi}")
-        if criteria.get("min_reps") or criteria.get("max_reps"):
-            lo = criteria.get("min_reps", 0)
-            hi = criteria.get("max_reps", 0)
-            if lo and hi:
-                parts.append(f"Reps: {lo}\u2013{hi}")
-            elif lo:
-                parts.append(f"Reps \u2265 {lo}")
-            else:
-                parts.append(f"Reps \u2264 {hi}")
+                parts.append(f"{label} \u2265 {lo}{unit}")
+            elif hi:
+                parts.append(f"{label} \u2264 {hi}{unit}")
         return "  \u00b7  ".join(parts)
 
     def _apply_filters(self) -> None:
@@ -705,17 +663,13 @@ class CardBrowserWidget(QWidget):
         arrow = (
             '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" '
             f'fill="none" stroke="{color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">'
+            f'{_SVG_ARROW_DOWN if desc else _SVG_ARROW_UP}</svg>'
         )
-        if desc:
-            arrow += '<path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/>'
-            self._sort_dir_btn.setToolTip("Descending (click for ascending)")
-        else:
-            arrow += '<path d="M12 19V5"/><path d="M5 12l7-7 7 7"/>'
-            self._sort_dir_btn.setToolTip("Ascending (click for descending)")
-        arrow += '</svg>'
-        pm = QPixmap()
-        pm.loadFromData(arrow.encode("utf-8"))
-        self._sort_dir_btn.setIcon(QIcon(pm))
+        self._sort_dir_btn.setToolTip(
+            "Descending (click for ascending)" if desc
+            else "Ascending (click for descending)"
+        )
+        self._sort_dir_btn.setIcon(_svg_icon(arrow))
 
     def _on_mode_toggled(self, checked: bool) -> None:
         self._edit_mode = checked
@@ -726,10 +680,7 @@ class CardBrowserWidget(QWidget):
     def _update_mode_icon(self) -> None:
         color = self.palette().windowText().color().name()
         template = _SVG_EDIT if self._edit_mode else _SVG_VIEW
-        svg = template.format(color=color)
-        pm = QPixmap()
-        pm.loadFromData(svg.encode("utf-8"))
-        self._mode_btn.setIcon(QIcon(pm))
+        self._mode_btn.setIcon(_svg_icon(template.format(color=color)))
         self._mode_btn.setToolTip("Edit mode" if self._edit_mode else "View mode")
 
     def cleanup(self) -> None:
@@ -738,74 +689,120 @@ class CardBrowserWidget(QWidget):
 
     # ── Auto-refresh hooks ──
 
-    _suppress_next_op: bool = False
     _needs_refresh_on_show: bool = False
 
     def _hook(self) -> None:
         gui_hooks.operation_did_execute.append(self._on_operation_did_execute)
-        self.tray.card_action_handled.connect(self._on_card_action_handled)
+        gui_hooks.sync_did_finish.append(self._on_sync_did_finish)
 
     def _unhook(self) -> None:
-        try:
-            gui_hooks.operation_did_execute.remove(self._on_operation_did_execute)
-        except ValueError:
-            pass
+        for hook, cb in (
+            (gui_hooks.operation_did_execute, self._on_operation_did_execute),
+            (gui_hooks.sync_did_finish, self._on_sync_did_finish),
+        ):
+            try:
+                hook.remove(cb)
+            except ValueError:
+                pass
 
-    def _on_card_action_handled(self) -> None:
-        """Tray already did a targeted refresh — suppress the next op hook."""
-        self._suppress_next_op = True
+    def _on_sync_did_finish(self) -> None:
+        """Fully refresh after a sync.
+
+        Synced changes carry their original (remote) mod times, so the
+        watermark diff in _refresh_modified can't see them — a full refresh is
+        the only reliable response. Scroll position is preserved.
+        """
+        if self.isVisible():
+            self._populate_combo(force_render=True)
+        else:
+            self._needs_refresh_on_show = True
 
     def _on_operation_did_execute(self, changes, handler) -> None:
-        """React to collection changes with minimal refresh."""
-        # Only care about card/note/deck changes
-        dominated = changes.card or changes.note or changes.deck or changes.study_queues
-        if not dominated:
+        """React to external collection changes with the minimal refresh.
+
+        The add-on's own mutations update the DOM directly (they don't run
+        through CollectionOp, so they never fire this hook); anything that
+        reaches here is an external change — an edit in the Browser, Add
+        Cards, another add-on, undo.
+        """
+        if not (
+            changes.card or changes.note or changes.deck
+            or changes.notetype or changes.study_queues
+        ):
             return
 
-        # If we're not visible, defer a full refresh for when we become visible
+        # Not visible → defer a full refresh until we are shown again.
         if not self.isVisible():
             self._needs_refresh_on_show = True
             return
 
-        # If our own bridge command already handled this, skip
-        if self._suppress_next_op:
-            self._suppress_next_op = False
-            return
-
-        # Deck structure changed → full refresh (unavoidable)
-        if changes.deck:
-            self.tray._pending_edit_cid = None
-            self.tray._pending_add_deck_id = None
-            self._refresh_current_deck()
-            return
-
         col = mw.col
-        if col is None:
+        if col is None or self.tray._tree_root is None:
             return
 
-        # If we know a specific card was being edited, refresh just that card
-        if self.tray._pending_edit_cid is not None:
-            cid = self.tray._pending_edit_cid
-            self.tray._pending_edit_cid = None
-            self.tray._targeted_refresh_card(col, cid)
+        try:
+            # Deck structure or a notetype changed → full refresh, including the
+            # top-level dropdown (a rename keeps ids but changes labels).
+            if changes.deck or changes.notetype:
+                self._populate_combo(force_render=True)
+                return
+
+            # Spot-apply membership changes (Add Cards, external delete/move)
+            # by diffing the tree's card→deck map. "full" = it re-rendered
+            # everything (which also advances the mod watermark) — done.
+            structural = self.tray.sync_external_changes(col)
+            if structural == "full":
+                return
+
+            if changes.card or changes.note:
+                self._refresh_modified(col, structural_handled=structural == "spot")
+        except Exception:
+            # Never leave a stale view (or break the hook chain) because a
+            # targeted refresh hit an edge case — converge with a full render.
+            self._refresh_current_deck()
+
+    def _refresh_modified(self, col, structural_handled: bool = False) -> None:
+        """Refresh the notes an external op touched, found via mod times.
+
+        ``OpChanges`` says *that* something changed but not *what*; the tray's
+        mod-time watermark identifies the exact cards/notes regardless of
+        where the change originated. Falls back to a full (scroll-preserving)
+        re-render when the change is large or can't be pinpointed (undo
+        restores old mod times, so nothing in the collection matches).
+        *structural_handled* means membership changes were already
+        spot-applied — an empty sweep is then expected (e.g. a deletion leaves
+        no modified rows behind), not a pinpoint miss.
+        """
+        card_rows, nids, changed_anywhere = self.tray.consume_modified(col)
+        nid_set = set(nids)
+        nid_set.update(nid for _cid, nid in card_rows)
+
+        if not nid_set:
+            if not changed_anywhere and not structural_handled:
+                self.tray.refresh_tree()
+            return
+        if len(nid_set) > 200:
+            # Bulk change; resolving cards per note would be slower than one render.
+            self.tray.refresh_tree()
             return
 
-        # If we know a card was being added to a specific deck, refresh that section
-        if self.tray._pending_add_deck_id is not None:
-            deck_id = self.tray._pending_add_deck_id
-            self.tray._pending_add_deck_id = None
-            if self.tray._tree_root is not None:
-                self.tray.refresh_section(deck_id)
-                self.tray._update_title(col)
-            else:
-                self._refresh_current_deck()
-            return
+        known = self.tray.known_cids
+        to_refresh = [
+            (nid, cids)
+            for nid, cids in get_note_cards(col, list(nid_set)).items()
+            if any(c in known for c in cids)
+        ]
 
-        # Unknown external change → just update header counts (no card content flash)
-        # User can hit manual refresh if they need to see content changes
-        if self.tray._tree_root is not None:
-            self.tray._refresh_all_header_counts(col)
-        # (If no tree, nothing visible to update)
+        if not to_refresh:
+            return  # the change was outside the rendered tree
+        if len(to_refresh) > 25 or (len(to_refresh) > 1 and self.tray._has_filters):
+            # Bulk change — or several sections to rebuild under active
+            # filters, where per-note refreshes each rebuild a section (or the
+            # whole tree); one render is cheaper and equally correct.
+            self.tray.refresh_tree()
+            return
+        for nid, cids in to_refresh:
+            self.tray.refresh_note(col, nid, cids)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -815,16 +812,7 @@ class CardBrowserWidget(QWidget):
 
     def _update_refresh_icon(self) -> None:
         color = self.palette().windowText().color().name()
-        svg = (
-            '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" '
-            f'fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-            '<path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>'
-            '<path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>'
-            '</svg>'
-        )
-        pm = QPixmap()
-        pm.loadFromData(svg.encode("utf-8"))
-        self._refresh_btn.setIcon(QIcon(pm))
+        self._refresh_btn.setIcon(_svg_icon(_SVG_REFRESH.format(color=color)))
 
 
 # ── Window mode ──
@@ -854,6 +842,9 @@ def open_card_browser_window():
         CardBrowserWindow._instance = CardBrowserWindow(mw)
     CardBrowserWindow._instance.show()
     CardBrowserWindow._instance.activateWindow()
+    # Refresh the top-level deck dropdown (a deck may have been added/removed);
+    # this is a no-op render when the selection is unchanged.
+    CardBrowserWindow._instance._widget._populate_combo()
 
 
 # ── Embedded mode ──
@@ -867,17 +858,32 @@ class EmbeddedBrowser:
     def __init__(self) -> None:
         self._widget: CardBrowserWidget | None = None
         self._active = False
+        # This is a lifetime singleton (the widget is created once and reused), so
+        # these hooks are registered exactly once and never need removing.
         gui_hooks.state_will_change.append(self._on_state_will_change)
+        # After an op (e.g. editing a card) Anki re-renders its own screen into
+        # mw.web and re-shows it on top of us. These post-render hooks fire *after*
+        # that show, so re-hiding here reliably keeps us in front — whether the
+        # browser was opened over the deck list or a deck's overview.
+        gui_hooks.deck_browser_did_render.append(self._reassert)
+        gui_hooks.overview_did_refresh.append(self._reassert)
 
     def show(self) -> None:
         if self._widget is None:
             self._widget = CardBrowserWidget(mw)
             mw.mainLayout.addWidget(self._widget)
 
-        # Hide Anki's own content areas
+        # Hide Anki's own content areas and bring ours to the front. bottomWeb
+        # needs a *real* Qt hide (setVisible): its own hide() merely collapses the
+        # height to 1px, and Anki re-expands it asynchronously after every render
+        # (BottomBar.draw / moveToState → adjustHeightToFit → setFixedHeight lands
+        # a turn later, after our render hooks), which flashed the bottom toolbar
+        # ("Get Shared / Create Deck / Import File") back over us. A setVisible
+        # widget is dropped from the layout and ignores that deferred height change.
         mw.web.hide()
-        mw.bottomWeb.hide()
+        mw.bottomWeb.setVisible(False)
         self._widget.show()
+        self._widget.raise_()
         self._active = True
 
         # Refresh content (deck list may have changed)
@@ -889,14 +895,33 @@ class EmbeddedBrowser:
         self._active = False
         if self._widget is not None:
             self._widget.hide()
-        # Restore Anki's own content areas
+        # Restore Anki's own content areas. bottomWeb was Qt-hidden via setVisible,
+        # so make it visible again and let its height re-fit to content.
         mw.web.show()
+        mw.bottomWeb.setVisible(True)
         mw.bottomWeb.show()
+
+    def _reassert(self, *args) -> None:
+        """Keep our widget in front if Anki re-rendered its deck browser over us."""
+        if self._active and self._widget is not None:
+            mw.web.hide()
+            mw.bottomWeb.setVisible(False)
+            self._widget.raise_()
 
     def _on_state_will_change(self, new_state: str, old_state: str) -> None:
         # When Anki transitions to any standard state, hide viewer
         if self._active:
             self.hide()
+
+    def teardown(self) -> None:
+        """Destroy the widget (profile close) so no stale collection state
+        survives into the next profile. The singleton and its hooks remain;
+        they no-op until show() builds a fresh widget."""
+        self.hide()
+        if self._widget is not None:
+            self._widget.cleanup()
+            self._widget.deleteLater()
+            self._widget = None
 
 
 def open_card_browser_embedded():
@@ -914,3 +939,18 @@ def open_card_browser():
         open_card_browser_window()
     else:
         open_card_browser_embedded()
+
+
+def _on_profile_will_close() -> None:
+    """Tear down any open browser UI before the collection goes away.
+
+    Both hosts hold references into the closing collection (deck tree nodes,
+    card-id snapshots, hooks); a fresh widget is built on next open.
+    """
+    if CardBrowserWindow._instance is not None:
+        CardBrowserWindow._instance.close()
+    if EmbeddedBrowser._instance is not None:
+        EmbeddedBrowser._instance.teardown()
+
+
+gui_hooks.profile_will_close.append(_on_profile_will_close)
