@@ -137,6 +137,11 @@ HANDOFF.md.)
 
 ### Findings from the dedicated refresh/state audit (2026-07-06)
 
+> **Status update:** the CollectionOp migration (§5) shipped 2026-07-06 and
+> resolved findings 3, 4 and 5 by construction (tests in
+> tests/test_op_pipeline.py). Findings 1, 2, 6, 7, 8, 9 remain — they are
+> the residual state-sync batch.
+
 Ordered by user-visible impact; all verified against the code. Most are [S]
 fixes and should ship as one "state-sync batch" before new features.
 
@@ -191,7 +196,7 @@ fixes and should ship as one "state-sync batch" before new features.
 
 ## 5 · Structural improvements
 
-- **Migrate mutations to `CollectionOp`** [M–L, highest leverage] — today our
+- **Migrate mutations to `CollectionOp`** [DONE 2026-07-06] — today our
   own writes (suspend/flag/move/delete/tags) bypass Anki's op pipeline, so:
   no undo toasts, no automatic undo-status updates, and a *second* refresh
   pipeline exists just for our own actions. All the hard machinery to react

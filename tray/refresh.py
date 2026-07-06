@@ -14,7 +14,7 @@ import json
 
 from anki.cards import CardId
 
-from ..core.card_data import get_card_decks, get_deck_cards
+from ..core.card_data import get_card_decks, get_deck_cards, get_note_cards
 
 
 class RefreshMixin:
@@ -119,68 +119,51 @@ class RefreshMixin:
             self._refresh_header_counts(col, deck_id)
         self._update_title(col)
 
-    def refresh_units(self, col, lead_cids) -> None:
-        """Refresh several rendered units after a bulk mutation.
+    def _refresh_modified(self, col, structural_handled: bool = False) -> None:
+        """Refresh the notes an op touched, found via mod times.
 
-        Under filters (visibility may have changed) or for large selections,
-        one full render is cheaper and equally correct.
+        ``OpChanges`` says *that* something changed but not *what*; the
+        tracker's mod-time watermark identifies the exact cards/notes
+        regardless of where the change originated. Falls back to a full
+        (scroll-preserving) re-render when the change is large or can't be
+        pinpointed (undo restores old mod times, so nothing matches).
+        *structural_handled* means membership changes were already
+        spot-applied — an empty sweep is then expected (e.g. a deletion
+        leaves no modified rows behind), not a pinpoint miss.
         """
-        if self._filters.active or len(lead_cids) > 25:
+        card_rows, nids, changed_anywhere = self.consume_modified(col)
+        nid_set = set(nids)
+        nid_set.update(nid for _cid, nid in card_rows)
+
+        if not nid_set:
+            if not changed_anywhere and not structural_handled:
+                self.refresh_tree()
+            return
+        if len(nid_set) > 200:
+            # Bulk change; resolving cards per note would be slower than one
+            # render.
             self.refresh_tree()
             return
-        for lead in lead_cids:
-            self._replace_unit(col, lead)
-        for did in set(get_card_decks(col, [int(c) for c in lead_cids]).values()):
-            self._refresh_header_counts(col, did)
-        self._update_title(col)
 
-    # ── Our own moves (drag-drop / bulk change-deck) ──
+        known = self.known_cids
+        to_refresh = [
+            (nid, cids)
+            for nid, cids in get_note_cards(col, list(nid_set)).items()
+            if any(c in known for c in cids)
+        ]
 
-    def apply_local_move(self, col, lead_cids, moved_cids, src_dids,
-                         target_did: int) -> None:
-        """Update the page after we moved *moved_cids* to *target_did*.
-
-        Targeted path: drop the moved unit(s) from the DOM, rebuild only the
-        receiving section, and update the source/ancestor counts — no page
-        reload, scroll untouched. Falls back to one full (scroll-preserving)
-        re-render whenever the targeted path can't be proven correct:
-
-        - active filters — the target section may be absent from the DOM
-          entirely (filtered out), so there is nothing to rebuild into;
-        - the move touches the tree root's own card area — it renders as a
-          bare card grid, not a rebuildable section;
-        - the target isn't in the rendered tree (defensive; drops only ever
-          target in-tree headers).
-
-        The membership snapshot is updated either way so the next external-op
-        diff doesn't mistake our own move for an external one (undo still
-        shows up as a diff and is spot-applied).
-        """
-        self._tracker.record_move(moved_cids, target_did)
-
-        root_id = self._tree_root.deck_id if self._tree_root else None
-        if (
-            self._filters.active
-            or root_id is None
-            or target_did == root_id
-            or root_id in src_dids
-            or self._find_node_context(target_did) is None
-        ):
-            self._render_deck_tree(emit_tags=False)
+        if not to_refresh:
+            return  # the change was outside the rendered tree
+        if len(to_refresh) > 25 or (len(to_refresh) > 1 and self._filters.active):
+            # Bulk change — or several sections to rebuild under active
+            # filters, where per-note refreshes each rebuild a section (or
+            # the whole tree); one render is cheaper and equally correct.
+            self.refresh_tree()
             return
+        for nid, cids in to_refresh:
+            self.refresh_note(col, nid, cids)
 
-        # Remove the old unit(s) first: after the target section rebuild, a
-        # merged note group could reuse the same lead id.
-        for lead in lead_cids:
-            self._web.eval(f"removeCard({int(lead)})")
-        self.refresh_section(target_did)
-        for did in set(src_dids):
-            if did != target_did:
-                self._refresh_header_counts(col, did)
-        self._update_title(col)
-        self._refresh_open_detail(col)
-
-    # ── External changes (Anki's Browser, Add Cards, undo, other add-ons) ──
+    # ── Membership changes (adds / removals / moves — ours or external) ──
 
     def sync_external_changes(self, col) -> str:
         """Spot-apply external membership changes by diffing the tree's cards.

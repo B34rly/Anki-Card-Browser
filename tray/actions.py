@@ -1,108 +1,144 @@
 """Card mutations behind the tray's menus, detail overlay, and drag-drop.
 
-Each helper applies (or prompts for, then applies) one mutation and reports
-what happened; CardTray decides how to refresh the page afterwards. Nothing
-here touches the webview.
+Every mutation runs through CollectionOp, so Anki's undo stack and the
+`operation_did_execute` hook fire exactly as they do for Anki's own UI —
+the tray's op handler then refreshes the page. One pipeline serves our own
+changes and external ones alike; nothing here touches the webview.
+
+Helpers prompt where needed, start the op, and report whether an op was
+started (False = cancelled prompt / invalid target), so callers know
+whether to clear the selection. Success toasts go through _toast, which is
+inert when no real main window exists (headless tests).
 """
 from __future__ import annotations
 
 from anki.cards import CardId
 from anki.decks import DeckId
+from aqt.operations import CollectionOp
 from aqt.qt import QInputDialog, QMessageBox
 
-from ..core.card_data import get_cards_metadata, get_note_cards, get_tags_for_cards
+from ..core.card_data import get_cards_metadata, get_tags_for_cards
 
-# Bridge actions handled by apply_card_action (plus any "flag_N").
+# Bridge actions handled by apply_scheduling_action / the tag & deck prompts
+# (plus any "flag_N").
 CARD_ACTIONS = (
     "suspend", "unsuspend", "review_now", "bury", "unbury", "forget",
     "set_due", "reposition", "add_tag", "remove_tag", "change_deck",
 )
 
 
-def apply_scheduling_action(parent, col, action: str, cids) -> bool:
-    """Apply a flag/scheduling action to *cids*; True when something changed.
+def _toast(parent, msg: str) -> None:
+    """Success feedback; inert under headless tests."""
+    try:
+        from aqt.utils import tooltip
+        tooltip(msg, parent=parent)
+    except Exception:
+        pass
 
-    set_due and reposition prompt first; a cancelled prompt changes nothing.
+
+def _start_op(parent, op, msg: str | None = None) -> None:
+    """Run *op* through CollectionOp (undo + op hook), toasting on success."""
+    collection_op = CollectionOp(parent, op)
+    if msg:
+        collection_op.success(lambda _res: _toast(parent, msg))
+    collection_op.run_in_background(initiator=parent)
+
+
+def _cards_label(n: int) -> str:
+    return f"{n} cards" if n != 1 else "1 card"
+
+
+def apply_scheduling_action(parent, col, action: str, cids) -> bool:
+    """Start the op for a flag/scheduling action.
+
+    Returns True when an op was started (False = cancelled prompt). The
+    page refresh arrives via the tray's operation_did_execute handler.
     """
+    label = _cards_label(len(cids))
     if action.startswith("flag_"):
-        col.set_user_flag_for_cards(int(action[5:]), cids)
+        flag = int(action[5:])
+        msg = f"Cleared flag on {label}" if flag == 0 else f"Flagged {label}"
+        _start_op(parent, lambda c: c.set_user_flag_for_cards(flag, cids), msg)
     elif action == "suspend":
-        col.sched.suspend_cards(cids)
+        _start_op(parent, lambda c: c.sched.suspend_cards(cids), f"Suspended {label}")
     elif action == "unsuspend":
-        col.sched.unsuspend_cards(cids)
+        _start_op(parent, lambda c: c.sched.unsuspend_cards(cids), f"Unsuspended {label}")
     elif action == "review_now":
-        col.sched.set_due_date(cids, "0")
+        _start_op(parent, lambda c: c.sched.set_due_date(cids, "0"), f"{label} due now")
     elif action == "bury":
-        col.sched.bury_cards(cids)
+        _start_op(parent, lambda c: c.sched.bury_cards(cids), f"Buried {label}")
     elif action == "unbury":
-        col.sched.unbury_cards(cids)
+        _start_op(parent, lambda c: c.sched.unbury_cards(cids), f"Unburied {label}")
     elif action == "forget":
-        col.sched.schedule_cards_as_new(cids)
-    elif action == "set_due":
-        spec, ok = QInputDialog.getText(
-            parent, "Set Due Date",
-            "Days from today (e.g. 0, 3, 1-7), or a date (YYYY-MM-DD):",
+        _start_op(
+            parent, lambda c: c.sched.schedule_cards_as_new(cids),
+            f"Reset {label} to new",
         )
-        spec = spec.strip()
-        if not ok or not spec:
-            return False
-        try:
-            col.sched.set_due_date(cids, spec)
-        except Exception as e:
-            QMessageBox.warning(parent, "Set Due Date Failed", str(e))
-            return False
+    elif action == "set_due":
+        # Anki's own dialog: validates the spec, remembers the last input,
+        # and runs its own CollectionOp.
+        from anki.config import Config
+        from aqt.operations.scheduling import set_due_date_dialog
+
+        set_due_date_dialog(
+            parent=parent, card_ids=cids,
+            config_key=Config.String.SET_DUE_BROWSER,
+        )
     elif action == "reposition":
         pos, ok = QInputDialog.getInt(
             parent, "Reposition New Cards", "New position:", 1, 0, 9999999
         )
         if not ok:
             return False
-        try:
-            col.sched.reposition_new_cards(cids, pos, 1, False, False)
-        except Exception as e:
-            QMessageBox.warning(parent, "Reposition Failed", str(e))
-            return False
+        _start_op(
+            parent,
+            lambda c: c.sched.reposition_new_cards(cids, pos, 1, False, False),
+            f"Repositioned {label}",
+        )
     else:
         return False
     return True
 
 
-def prompt_tag_action(parent, col, action: str, cids) -> dict[int, list[int]] | None:
-    """Prompt for and apply an add/remove tag on the note(s) behind *cids*.
-
-    Returns nid → [cids] for every affected note (tags show on every card of
-    a note, so the caller refreshes each), or None when nothing changed.
-    """
+def prompt_tag_action(parent, col, action: str, cids) -> bool:
+    """Prompt for and start an add/remove tag op on the note(s) behind *cids*."""
     from anki.notes import NoteId
 
     card_ids = [int(c) for c in cids]
-    note_cards = get_note_cards(
-        col, list({m["nid"] for m in get_cards_metadata(col, card_ids).values()})
-    )
-    note_ids = [NoteId(n) for n in note_cards]
+    note_ids = [
+        NoteId(n)
+        for n in {m["nid"] for m in get_cards_metadata(col, card_ids).values()}
+    ]
     if not note_ids:
-        return None
+        return False
+    n_label = f"{len(note_ids)} notes" if len(note_ids) != 1 else "1 note"
     if action == "add_tag":
         tag, ok = QInputDialog.getText(
             parent, "Add Tag", "Tag(s) to add (space-separated):"
         )
         tag = tag.strip()
         if not ok or not tag:
-            return None
-        col.tags.bulk_add(note_ids, tag)
+            return False
+        _start_op(
+            parent, lambda c: c.tags.bulk_add(note_ids, tag),
+            f"Tagged {n_label}",
+        )
     else:
         current = set(get_tags_for_cards(col, card_ids))
         if not current:
             QMessageBox.information(parent, "Remove Tag", "There are no tags to remove.")
-            return None
+            return False
         tag, ok = QInputDialog.getItem(
             parent, "Remove Tag", "Tag to remove:",
             sorted(current, key=str.lower), 0, False,
         )
         if not ok or not tag:
-            return None
-        col.tags.bulk_remove(note_ids, tag)
-    return note_cards
+            return False
+        _start_op(
+            parent, lambda c: c.tags.bulk_remove(note_ids, tag),
+            f"Untagged {n_label}",
+        )
+    return True
 
 
 def prompt_change_deck(parent, col, cids) -> int | None:
@@ -140,20 +176,37 @@ def resolve_normal_deck(col, deck_id: int):
     return deck
 
 
-def move_cards(col, cids, deck_id: int) -> bool:
-    """Move exactly *cids* to *deck_id*; True when the move was applied."""
-    if resolve_normal_deck(col, deck_id) is None:
+def move_cards(parent, col, cids, deck_id: int) -> bool:
+    """Start the op moving exactly *cids* to *deck_id* (False = bad target)."""
+    deck = resolve_normal_deck(col, deck_id)
+    if deck is None:
         return False
-    col.set_deck([CardId(int(c)) for c in cids], DeckId(deck_id))
+    card_ids = [CardId(int(c)) for c in cids]
+    _start_op(
+        parent, lambda c: c.set_deck(card_ids, DeckId(deck_id)),
+        f"Moved {_cards_label(len(card_ids))} to {deck['name']}",
+    )
     return True
 
 
 def confirm_delete(parent, count: int) -> bool:
     """Ask before deleting *count* card(s); True to proceed."""
-    label = f"{count} cards" if count > 1 else "this card"
+    label = _cards_label(count)
     confirm = QMessageBox.question(
-        parent, "Delete Card",
-        f"Are you sure you want to delete {label}?\n\nThis cannot be undone.",
+        parent, "Delete Cards",
+        f"Delete {label}? (This can be undone with Ctrl+Z.)",
         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
     )
     return confirm == QMessageBox.StandardButton.Yes
+
+
+def delete_cards(parent, col, cids) -> bool:
+    """Confirm, then start the op removing card(s) + newly orphaned notes."""
+    if not confirm_delete(parent, len(cids)):
+        return False
+    card_ids = [CardId(int(c)) for c in cids]
+    _start_op(
+        parent, lambda c: c.remove_cards_and_orphaned_notes(card_ids),
+        f"Deleted {_cards_label(len(card_ids))}",
+    )
+    return True

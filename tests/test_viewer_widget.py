@@ -30,8 +30,10 @@ def test_widget_constructs_and_renders(widget, fake_mw):
 
 
 def test_external_change_handler_survives_filters(widget, fake_mw):
-    """Regression: the bulk-change branch read a tray attribute that a
-    refactor had removed; it only runs with filters active and >1 note."""
+    """The op pipeline's bulk-change branch (filters active, >1 note) must
+    converge without touching removed attributes (regression)."""
+    from aqt import gui_hooks
+
     col = fake_mw.col
     widget._card_search.setText("qqq")  # matches nothing → filter stays active
     widget._apply_filters()
@@ -46,10 +48,11 @@ def test_external_change_handler_survives_filters(widget, fake_mw):
     changes = SimpleNamespace(
         card=True, note=True, deck=False, notetype=False, study_queues=False
     )
-    # isVisible() is False for an unshown widget; force the visible path so
-    # the handler actually runs instead of deferring to showEvent.
+    # isVisible() is False for unshown widgets; force the visible path so
+    # both hook handlers (widget structural + tray card/note) actually run.
     widget.isVisible = lambda: True
-    widget._on_operation_did_execute(changes, handler=None)
-    # convergence: the handler must not have blown up, and the tray still
+    widget.tray.isVisible = lambda: True
+    gui_hooks.operation_did_execute(changes, None)
+    # convergence: the handlers must not blow up, and the tray still
     # reflects the filtered view (title shows filtered counts)
     assert "/" in widget.tray.title

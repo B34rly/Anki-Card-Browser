@@ -24,16 +24,6 @@ class ChangeTracker:
         self.known_cards = {cid: m["did"] for cid, m in meta.items()}
         self.mod_watermark = int(time.time())
 
-    def record_move(self, cids, target_did: int) -> None:
-        """Keep the membership snapshot in step with our own local move, so
-        the next external-op diff doesn't re-apply it."""
-        for c in cids:
-            self.known_cards[int(c)] = target_did
-
-    def forget(self, cids) -> None:
-        """Drop deleted cards from the snapshot."""
-        for c in cids:
-            self.known_cards.pop(int(c), None)
 
     def diff_membership(self, current: dict[int, int]):
         """Diff the live cid→deck map against the snapshot and adopt it.

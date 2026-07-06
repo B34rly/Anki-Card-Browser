@@ -25,7 +25,8 @@ import json
 
 from anki.cards import CardId
 from anki.decks import DeckId
-from aqt import mw
+from aqt import gui_hooks, mw
+from aqt.operations import CollectionOp
 from aqt.qt import (
     QLabel,
     QMessageBox,
@@ -36,7 +37,6 @@ from aqt.qt import (
 )
 from aqt.webview import AnkiWebViewKind
 
-from ..core.card_data import get_card_decks
 from ..decks.ops import (
     confirm_delete_deck,
     open_add_cards,
@@ -104,6 +104,12 @@ class CardTray(QWidget, RenderMixin, RefreshMixin):
         self._web.set_bridge_command(self._on_bridge_cmd, self)
         layout.addWidget(self._web, 1)
 
+        # One refresh pipeline for every collection change: our own mutations
+        # run through CollectionOp, so they fire this hook just like edits
+        # from Anki's Browser, Add Cards, undo, or other add-ons.
+        self._needs_refresh_on_show = False
+        gui_hooks.operation_did_execute.append(self._on_operation_did_execute)
+
     # ── Simple properties ──
 
     @property
@@ -158,7 +164,46 @@ class CardTray(QWidget, RenderMixin, RefreshMixin):
             self._render_deck_tree(emit_tags=False)
 
     def cleanup(self) -> None:
+        try:
+            gui_hooks.operation_did_execute.remove(self._on_operation_did_execute)
+        except ValueError:
+            pass
         self._web.cleanup()
+
+    # ── The op-driven refresh pipeline ──
+
+    def _on_operation_did_execute(self, changes, initiator) -> None:
+        """React to any collection op — ours or external — with the minimal
+        refresh. Structural (deck/notetype) changes are left to the viewer,
+        which rebuilds the whole browser including the deck dropdown."""
+        col = mw.col
+        if col is None or self._tree_root is None:
+            return
+        if changes.deck or changes.notetype:
+            return
+        if not (changes.card or changes.note or changes.study_queues):
+            return
+        if not self.isVisible():
+            self._needs_refresh_on_show = True
+            return
+        try:
+            structural = self.sync_external_changes(col)
+            if structural != "full" and (changes.card or changes.note):
+                self._refresh_modified(col, structural_handled=structural == "spot")
+            # A full render resets the overlay (and clears _open_detail);
+            # targeted paths re-push it so it can't go stale — and if its
+            # unit was deleted, the failed push closes it.
+            self._refresh_open_detail(col)
+        except Exception:
+            # Never leave a stale view (or break the hook chain) because a
+            # targeted refresh hit an edge case — converge with a full render.
+            self.refresh_tree()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if self._needs_refresh_on_show:
+            self._needs_refresh_on_show = False
+            self.refresh_tree()
 
     def _notify_tree_changed(self) -> None:
         """Tell the viewer the deck structure changed.
@@ -240,7 +285,9 @@ class CardTray(QWidget, RenderMixin, RefreshMixin):
     def _on_force_review_deck(self, col, payload: str) -> None:
         """Reset every card in the subtree to due today, then start review.
 
-        This overwrites scheduling for the whole deck, so confirm first.
+        This overwrites scheduling for the whole deck, so confirm first. The
+        reset runs as an op, so the (still open, or later reopened) browser
+        refreshes its badges through the normal pipeline.
         """
         deck_id = int(payload)
         deck = col.decks.get(DeckId(deck_id))
@@ -256,9 +303,15 @@ class CardTray(QWidget, RenderMixin, RefreshMixin):
         )
         if confirm != QMessageBox.StandardButton.Yes:
             return
-        col.sched.set_due_date([CardId(c) for c in cids], "0")
-        col.decks.set_current(DeckId(deck_id))
-        mw.moveToState("review")
+        card_ids = [CardId(c) for c in cids]
+
+        def _start_review(_res) -> None:
+            col.decks.set_current(DeckId(deck_id))
+            mw.moveToState("review")
+
+        CollectionOp(
+            self, lambda c: c.sched.set_due_date(card_ids, "0")
+        ).success(_start_review).run_in_background(initiator=self)
 
     def _on_add_card(self, col, payload: str) -> None:
         open_add_cards(int(payload))
@@ -296,129 +349,66 @@ class CardTray(QWidget, RenderMixin, RefreshMixin):
     # ── Card-level bridge handlers ──
 
     def _on_card_action(self, col, action: str, cids) -> None:
-        """Apply a per-card / per-group action and refresh the affected unit."""
-        lead = int(cids[0])
+        """Start the op for a per-card / per-group menu action.
+
+        No refresh here: the op fires operation_did_execute and the pipeline
+        (_on_operation_did_execute) applies the minimal page update.
+        """
         if action in ("add_tag", "remove_tag"):
-            note_cards = actions.prompt_tag_action(self, col, action, cids)
-            if note_cards is None:
-                return
-            # Tags show on every card of a note; refresh each affected note.
-            for nid, note_cids in note_cards.items():
-                self.refresh_note(col, nid, note_cids)
+            actions.prompt_tag_action(self, col, action, cids)
         elif action == "change_deck":
             target = actions.prompt_change_deck(self, col, cids)
-            if target is None:
-                return
-            self._move_cids(col, [lead], [int(c) for c in cids], target)
-            return  # _move_cids handles the refresh, incl. the open detail
+            if target is not None:
+                actions.move_cards(self, col, cids, target)
         else:
-            if not actions.apply_scheduling_action(self, col, action, cids):
-                return
-            self._targeted_refresh_card(col, lead)
-        self._refresh_open_detail(col)
+            actions.apply_scheduling_action(self, col, action, cids)
 
     def _on_bulk_action(self, col, payload: str) -> None:
         """Multiselect bar: "<action>:<lead cids>". Leads are expanded to
-        their group members; the selection is cleared once the action
-        actually changed something (a cancelled prompt keeps it)."""
+        their group members; the selection is cleared once an op actually
+        started (a cancelled prompt keeps it). Refresh comes from the op
+        pipeline."""
         action, cids_s = payload.split(":", 1)
         leads = [int(c) for c in cids_s.split(",") if c]
         if not leads:
             return
-        expanded = [int(c) for c in self._builder.expand_group_cids(leads)]
-        card_ids = [CardId(c) for c in expanded]
+        card_ids = self._builder.expand_group_cids(leads)
 
         if action == "change_deck":
             target = actions.prompt_change_deck(self, col, card_ids)
-            if target is None:
-                return
+            started = target is not None and actions.move_cards(
+                self, col, card_ids, target
+            )
+        elif action == "delete":
+            started = actions.delete_cards(self, col, card_ids)
+        elif action in ("add_tag", "remove_tag"):
+            started = actions.prompt_tag_action(self, col, action, card_ids)
+        else:
+            started = actions.apply_scheduling_action(self, col, action, card_ids)
+        if started:
             self._web.eval("clearSelection()")
-            self._move_cids(col, leads, expanded, target)
-            return
-
-        if action == "delete":
-            if not actions.confirm_delete(self, len(card_ids)):
-                return
-            affected = set(get_card_decks(col, expanded).values())
-            col.remove_cards_and_orphaned_notes(card_ids)
-            self._tracker.forget(expanded)
-            self._web.eval("clearSelection()")
-            for lead in leads:
-                self._web.eval(f"removeCard({lead})")
-            for did in affected:
-                self._refresh_header_counts(col, did)
-            self._update_title(col)
-            self._close_detail_if_deleted(set(expanded))
-            self._refresh_open_detail(col)
-            return
-
-        if action in ("add_tag", "remove_tag"):
-            note_cards = actions.prompt_tag_action(self, col, action, card_ids)
-            if note_cards is None:
-                return
-            self._web.eval("clearSelection()")
-            if len(note_cards) > 25:
-                self.refresh_tree()
-            else:
-                for nid, note_cids in note_cards.items():
-                    self.refresh_note(col, nid, note_cids)
-            self._refresh_open_detail(col)
-            return
-
-        if not actions.apply_scheduling_action(self, col, action, card_ids):
-            return
-        self._web.eval("clearSelection()")
-        self.refresh_units(col, leads)
-        self._refresh_open_detail(col)
 
     def _on_move_cards(self, col, payload: str) -> None:
         """Drag-and-drop: "<deck_id>:<cids>". Lead cids stand in for their
         whole group (the drag handle is the group frame; inner cards aren't
-        draggable)."""
+        draggable). The set_deck op drives the page update — the spot path
+        rebuilds both ends of the move (or falls back to a full render under
+        filters / around groups / in the root area)."""
         did_s, cids_s = payload.split(":", 1)
         leads = [int(c) for c in cids_s.split(",") if c]
         if not leads:
             return
-        moved = [int(c) for c in self._builder.expand_group_cids(leads)]
-        self._move_cids(col, leads, moved, int(did_s))
-
-    def _move_cids(self, col, lead_cids, moved_cids, target_did: int) -> None:
-        """Move cards and apply the localized page update."""
-        # Source decks must be read BEFORE the move.
-        src_dids = set(get_card_decks(col, moved_cids).values())
-        if not actions.move_cards(col, moved_cids, target_did):
-            return
-        self.apply_local_move(col, lead_cids, moved_cids, src_dids, target_did)
+        moved = self._builder.expand_group_cids(leads)
+        if actions.move_cards(self, col, moved, int(did_s)):
+            self._web.eval("clearSelection()")
 
     def _on_delete_card(self, col, payload: str) -> None:
-        cids = [CardId(int(c)) for c in payload.split(",") if c]
-        if not cids:
-            return
-        lead_cid = int(cids[0])
-        # Capture deck + note-group identity BEFORE deletion (needed after).
-        try:
-            deck_id = col.get_card(cids[0]).did
-        except Exception:
-            deck_id = None
-        # A group-level delete passes the whole cid list; deleting one inner
-        # card passes a single cid that may coincide with a group lead — only
-        # treat it as a group delete in the former case.
-        is_note_group = lead_cid in self._builder.note_groups and len(cids) > 1
-        if not actions.confirm_delete(self, len(cids)):
-            return
-        col.remove_cards_and_orphaned_notes(cids)
-        self._tracker.forget(cids)
-        # Remove the card / note group from the DOM (groups key on lead cid)
-        self._web.eval(
-            f"removeGroup({lead_cid})" if is_note_group else f"removeCard({lead_cid})"
-        )
-        if deck_id is not None:
-            self._refresh_header_counts(col, deck_id)
-        self._update_title(col)
-        self._close_detail_if_deleted({int(c) for c in cids})
-        # An open group detail may have contained one of the deleted cards —
-        # refresh it so counts/actions don't go stale.
-        self._refresh_open_detail(col)
+        cids = [int(c) for c in payload.split(",") if c]
+        if cids and actions.delete_cards(self, col, cids):
+            # DOM removal, counts, title, and closing an affected open
+            # detail all happen in the op pipeline (deletes touching a
+            # rendered group correctly force a full render there).
+            self._web.eval("clearSelection()")
 
     # ── Detail overlay orchestration ──
 

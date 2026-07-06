@@ -15,7 +15,6 @@ from aqt.qt import (
     Qt,
 )
 
-from ..core.card_data import get_note_cards
 from ..tray import CardTray
 from ..decks.sidebar import DeckTree
 from ..decks import get_top_level_decks, find_deck_node
@@ -438,7 +437,7 @@ class CardBrowserWidget(QWidget):
         """Fully refresh after a sync.
 
         Synced changes carry their original (remote) mod times, so the
-        watermark diff in _refresh_modified can't see them — a full refresh is
+        tray's watermark diff can't see them — a full refresh is
         the only reliable response. Scroll position is preserved.
         """
         if self.isVisible():
@@ -447,91 +446,25 @@ class CardBrowserWidget(QWidget):
             self._needs_refresh_on_show = True
 
     def _on_operation_did_execute(self, changes, handler) -> None:
-        """React to external collection changes with the minimal refresh.
+        """React to structural collection changes (deck / notetype).
 
-        The add-on's own mutations update the DOM directly (they don't run
-        through CollectionOp, so they never fire this hook); anything that
-        reaches here is an external change — an edit in the Browser, Add
-        Cards, another add-on, undo.
+        Card- and note-level changes are handled by the tray's own
+        operation_did_execute handler (one pipeline for our ops and external
+        ones alike); this widget only rebuilds what the tray can't — the
+        top-level deck dropdown and the sidebar (a rename keeps ids but
+        changes labels/templates).
         """
-        if not (
-            changes.card or changes.note or changes.deck
-            or changes.notetype or changes.study_queues
-        ):
+        if not (changes.deck or changes.notetype):
             return
-
-        # Not visible → defer a full refresh until we are shown again.
         if not self.isVisible():
             self._needs_refresh_on_show = True
             return
-
-        col = mw.col
-        if col is None or self.tray._tree_root is None:
-            return
-
         try:
-            # Deck structure or a notetype changed → full refresh, including the
-            # top-level dropdown (a rename keeps ids but changes labels).
-            if changes.deck or changes.notetype:
-                self._populate_combo(force_render=True)
-                return
-
-            # Spot-apply membership changes (Add Cards, external delete/move)
-            # by diffing the tree's card→deck map. "full" = it re-rendered
-            # everything (which also advances the mod watermark) — done.
-            structural = self.tray.sync_external_changes(col)
-            if structural == "full":
-                return
-
-            if changes.card or changes.note:
-                self._refresh_modified(col, structural_handled=structural == "spot")
+            self._populate_combo(force_render=True)
         except Exception:
-            # Never leave a stale view (or break the hook chain) because a
-            # targeted refresh hit an edge case — converge with a full render.
+            # Never leave a stale view because a refresh hit an edge case.
             self._refresh_current_deck()
 
-    def _refresh_modified(self, col, structural_handled: bool = False) -> None:
-        """Refresh the notes an external op touched, found via mod times.
-
-        ``OpChanges`` says *that* something changed but not *what*; the tray's
-        mod-time watermark identifies the exact cards/notes regardless of
-        where the change originated. Falls back to a full (scroll-preserving)
-        re-render when the change is large or can't be pinpointed (undo
-        restores old mod times, so nothing in the collection matches).
-        *structural_handled* means membership changes were already
-        spot-applied — an empty sweep is then expected (e.g. a deletion leaves
-        no modified rows behind), not a pinpoint miss.
-        """
-        card_rows, nids, changed_anywhere = self.tray.consume_modified(col)
-        nid_set = set(nids)
-        nid_set.update(nid for _cid, nid in card_rows)
-
-        if not nid_set:
-            if not changed_anywhere and not structural_handled:
-                self.tray.refresh_tree()
-            return
-        if len(nid_set) > 200:
-            # Bulk change; resolving cards per note would be slower than one render.
-            self.tray.refresh_tree()
-            return
-
-        known = self.tray.known_cids
-        to_refresh = [
-            (nid, cids)
-            for nid, cids in get_note_cards(col, list(nid_set)).items()
-            if any(c in known for c in cids)
-        ]
-
-        if not to_refresh:
-            return  # the change was outside the rendered tree
-        if len(to_refresh) > 25 or (len(to_refresh) > 1 and self.tray.has_filters):
-            # Bulk change — or several sections to rebuild under active
-            # filters, where per-note refreshes each rebuild a section (or the
-            # whole tree); one render is cheaper and equally correct.
-            self.tray.refresh_tree()
-            return
-        for nid, cids in to_refresh:
-            self.tray.refresh_note(col, nid, cids)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)

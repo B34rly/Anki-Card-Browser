@@ -6,10 +6,10 @@ from webview_harness import DomPage
 
 def test_move_between_sections_is_targeted(tray, fake_mw):
     """A drag between two subdeck sections must not reload the page: the
-    moved unit is dropped from the DOM and only the receiving section is
-    rebuilt."""
+    set_deck op's spot path rebuilds exactly the two affected sections."""
     col = fake_mw.col
     cids = fake_mw.col._test_cids
+    alpha_did = col.decks.id_for_name("Parent::Alpha")
     beta_did = col.decks.id_for_name("Parent::Beta")
 
     pages_before = len(tray._web.pages)
@@ -18,13 +18,16 @@ def test_move_between_sections_is_targeted(tray, fake_mw):
 
     assert col.get_card(cids["cherry"]).did == beta_did
     assert len(tray._web.pages) == pages_before, "page must not reload"
-    assert any(e.startswith(f"removeCard({cids['cherry']})") for e in tray._web.evals)
-    assert any(e.startswith(f"replaceSection({beta_did}") for e in tray._web.evals)
-    # the rebuilt target section contains the moved card
-    section = next(e for e in tray._web.evals if e.startswith(f"replaceSection({beta_did}"))
+    # both ends of the move rebuilt in place — and nothing else
+    assert any(e.startswith(f"replaceSection({alpha_did}") for e in tray._web.evals)
+    section = next(
+        e for e in tray._web.evals if e.startswith(f"replaceSection({beta_did}")
+    )
     assert str(cids["cherry"]) in section
-    # membership snapshot follows our own move (external diff must not re-fire)
+    # membership snapshot adopted the move (no re-fire on the next op)
     assert tray._tracker.known_cards[cids["cherry"]] == beta_did
+    # our own move clears any active selection
+    assert "clearSelection()" in tray._web.evals
 
 
 def test_move_touching_root_area_falls_back_to_full_render(tray, fake_mw):

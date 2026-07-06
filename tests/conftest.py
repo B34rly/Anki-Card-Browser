@@ -218,12 +218,33 @@ def fake_mw(sample_col, monkeypatch):
 
     Auto-discovers every loaded add-on module that binds ``mw`` at import
     time, so the fixture survives file moves and package splits.
+
+    Also makes CollectionOp synchronous: the op runs inline on the fake
+    collection and fires ``operation_did_execute`` exactly like live Anki's
+    op pipeline (minus the background thread), so bridge-command tests see
+    their refreshes deterministically.
     """
     m = FakeMainWindow(sample_col)
     monkeypatch.setattr("aqt.mw", m, raising=False)
     for name, mod in list(sys.modules.items()):
         if name.startswith(ADDON_PKG) and mod is not None and hasattr(mod, "mw"):
             monkeypatch.setattr(mod, "mw", m)
+
+    from anki.collection import OpChanges
+    from aqt import gui_hooks
+    from aqt.operations import CollectionOp
+
+    def run_sync(self, *, initiator=None):
+        result = self._op(m.col)
+        changes = (
+            result if isinstance(result, OpChanges)
+            else getattr(result, "changes", result)
+        )
+        gui_hooks.operation_did_execute(changes, initiator)
+        if self._success:
+            self._success(result)
+
+    monkeypatch.setattr(CollectionOp, "run_in_background", run_sync)
     return m
 
 
@@ -273,6 +294,9 @@ def tray(qapp, fake_mw, fake_webview_cls, monkeypatch):
     tray_mod = addon_module("tray.tray")
     monkeypatch.setattr(tray_mod, "TrayWebView", fake_webview_cls)
     t = tray_mod.CardTray()
+    # The unshown widget would defer op-driven refreshes to showEvent;
+    # tests want them applied immediately.
+    monkeypatch.setattr(t, "isVisible", lambda: True)
     node = deck_node(fake_mw.col, "Parent")
     t.set_deck_tree(node, "Parent")
     yield t
