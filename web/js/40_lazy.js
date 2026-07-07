@@ -72,6 +72,11 @@ function fillCards(data) {
             tmp.innerHTML = data[key].trim();
             var card = tmp.firstElementChild;
             if (card) {
+                /* A selected placeholder fills into a selected unit (the
+                   data-lazy key IS the unit id). */
+                if (typeof _selected !== 'undefined' && _selected.has(key)) {
+                    card.classList.add('selected');
+                }
                 el.parentNode.replaceChild(card, el);
                 var container = card.closest('.deck-cards');
                 if (container) affectedContainers.add(container);

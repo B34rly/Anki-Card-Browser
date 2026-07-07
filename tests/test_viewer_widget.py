@@ -29,6 +29,21 @@ def test_widget_constructs_and_renders(widget, fake_mw):
     assert "Parent" in widget.tray.title
 
 
+def test_filter_change_consumes_pending_search_debounce(widget, fake_mw):
+    """Regression: a chip click (or clear-all) landing while the 300ms search
+    debounce was pending rendered the identical page twice — a visible flash
+    that also dropped in-flight lazy fills."""
+    from webview_harness import spin
+
+    widget._card_search.setText("che")  # textChanged starts the debounce
+    assert widget._search_timer.isActive()
+    pages_before = len(widget.tray._web.pages)
+    widget._apply_filters()  # e.g. a chip click
+    assert not widget._search_timer.isActive()
+    spin(400)  # the debounce window passes without a second render
+    assert len(widget.tray._web.pages) == pages_before + 1
+
+
 def test_external_change_handler_survives_filters(widget, fake_mw):
     """The op pipeline's bulk-change branch (filters active, >1 note) must
     converge without touching removed attributes (regression)."""

@@ -1,7 +1,8 @@
 /* ── Detail overlay ──
    Clicking a card / group asks Python for a full detail view (content, stats,
-   action bar); Python answers with showCardDetail(html, id). While it is open,
-   actions re-push a fresh detail and left/right arrows step through units. */
+   action bar); Python answers with showCardDetail(html, id, isRefresh). While
+   it is open, actions re-push a fresh detail (isRefresh=true) and left/right
+   arrows step through units. */
 var _overlayId = null;
 
 function expandCard(el) {
@@ -37,7 +38,13 @@ function _openOverlay() {
 }
 var _overlayNavDir = 0;
 var _overlaySwapTimer = null;
-function showCardDetail(html, id) {
+function showCardDetail(html, id, isRefresh) {
+    /* A refresh push can land mid-close (Escape while an op was rebuilding
+       the open detail): accepting it would reopen an overlay Python already
+       believes is closed — never refreshed, never closable from its side.
+       Only pushes for the unit currently shown may refresh; user-initiated
+       opens (isRefresh falsy) always win. */
+    if (isRefresh && id !== _overlayId) return;
     _overlayId = id;
     var overlay = document.getElementById('overlay');
     var inner = document.getElementById('overlay-card-content');

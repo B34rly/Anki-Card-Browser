@@ -69,6 +69,20 @@ function clearSelection() {
     updateSelectionBar();
 }
 
+/* Re-mark selected units inside *root* after a targeted DOM rebuild
+   (replaceSection) — fresh elements arrive without the .selected class.
+   Placeholders count too (a rebuild may collapse a selected card into one);
+   inner cards of an expanded note group are not units and never match. */
+function _reapplySelection(root) {
+    if (_selected.size === 0) return;
+    root.querySelectorAll('[data-cid], [data-group-lead], [data-lazy]')
+        .forEach(function(el) {
+            if (el.closest('.note-cards-body')) return;
+            var id = _selId(el) || el.getAttribute('data-lazy');
+            if (id && _selected.has(id)) el.classList.add('selected');
+        });
+}
+
 function updateSelectionBar() {
     var bar = document.getElementById('selection-bar');
     if (!bar) return;

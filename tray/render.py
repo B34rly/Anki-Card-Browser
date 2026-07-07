@@ -84,9 +84,9 @@ class RenderMixin:
         # One filter pass over the whole subtree; sections intersect against it.
         allowed = compute_allowed(col, all_cids, meta, today, self._filters)
         visible = all_cids if allowed is None else [c for c in all_cids if c in allowed]
-        # One eager decision per render, reused by targeted section refreshes
-        # (filters can't change without another full render), so a refreshed
-        # section can't disagree with the page around it.
+        # One eager decision per render; targeted section refreshes reuse it
+        # (filters can't change without another full render) but may upgrade
+        # small sections to eager — see refresh_section.
         self._eager = (
             allowed is not None and len(visible) <= builder_mod.EAGER_RENDER_LIMIT
         )
@@ -166,9 +166,15 @@ class RenderMixin:
             meta = get_cards_metadata(col, all_cids)
             today = col.sched.today
             allowed = compute_allowed(col, all_cids, meta, today, self._filters)
+            # Small sections rebuild with full card HTML even when the page
+            # rendered lazily: swapping already-loaded cards for placeholders
+            # would collapse the section's height and throw the viewport.
+            eager = (
+                self._eager or len(all_cids) <= builder_mod.EAGER_RENDER_LIMIT
+            )
             ctx = RenderContext(
                 col=col, meta=meta, today=today, filters=self._filters,
-                allowed=allowed, eager=self._eager,
+                allowed=allowed, eager=eager,
                 collapsed=self._collapsed_decks,
             )
             html = self._builder.build_section(ctx, node, full_path, depth)

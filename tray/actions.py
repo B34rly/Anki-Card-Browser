@@ -7,8 +7,8 @@ changes and external ones alike; nothing here touches the webview.
 
 Helpers prompt where needed, start the op, and report whether an op was
 started (False = cancelled prompt / invalid target), so callers know
-whether to clear the selection. Success toasts go through _toast, which is
-inert when no real main window exists (headless tests).
+whether to clear the selection. Success feedback goes through _toast →
+CardTray.show_toast (an in-page toast, styled with the browser).
 """
 from __future__ import annotations
 
@@ -28,12 +28,11 @@ CARD_ACTIONS = (
 
 
 def _toast(parent, msg: str) -> None:
-    """Success feedback; inert under headless tests."""
+    """Success feedback as an in-page toast (*parent* is the CardTray)."""
     try:
-        from aqt.utils import tooltip
-        tooltip(msg, parent=parent)
+        parent.show_toast(msg)
     except Exception:
-        pass
+        pass  # never let feedback break the op's success path
 
 
 def _start_op(parent, op, msg: str | None = None) -> None:

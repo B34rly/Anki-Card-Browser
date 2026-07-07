@@ -64,6 +64,34 @@ def test_search_above_eager_limit_keeps_placeholders(tray, fake_mw, monkeypatch)
     assert "banana bread" in fills[0]
 
 
+def test_section_rebuild_stays_eager_for_small_sections(tray, fake_mw):
+    """Regression: a targeted section rebuild inherited the page's lazy
+    decision, collapsing already-loaded cards back into short placeholders
+    and throwing the viewport. Small sections rebuild with full card HTML."""
+    col = fake_mw.col
+    cids = col._test_cids
+    alpha_did = col.decks.id_for_name("Parent::Alpha")
+    tray._web.reset_log()
+    tray.refresh_section(alpha_did)
+    sections = tray._web.evals_matching(f"replaceSection({alpha_did}")
+    assert len(sections) == 1
+    assert "data-lazy" not in sections[0]
+    assert "cherry cake" in sections[0]
+    assert f'data-cid=\\"{cids["cherry"]}\\"' in sections[0]  # JSON-escaped
+
+
+def test_section_rebuild_above_limit_keeps_placeholders(tray, fake_mw, monkeypatch):
+    """Genuinely huge sections still rebuild lazily."""
+    builder_mod = addon_module("tray.builder")
+    monkeypatch.setattr(builder_mod, "EAGER_RENDER_LIMIT", 0)
+    alpha_did = fake_mw.col.decks.id_for_name("Parent::Alpha")
+    tray._web.reset_log()
+    tray.refresh_section(alpha_did)
+    sections = tray._web.evals_matching(f"replaceSection({alpha_did}")
+    assert len(sections) == 1
+    assert "data-lazy" in sections[0]
+
+
 def _rendered_cids(html: str) -> set[int]:
     return {int(c) for c in re.findall(r'data-cid="(\d+)"', html)}
 

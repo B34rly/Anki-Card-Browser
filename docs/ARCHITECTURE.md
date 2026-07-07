@@ -39,7 +39,7 @@ card-browser/
 ├── tray/                   The card tray: webview + Python↔JS bridge
 │   ├── tray.py                 CardTray widget — state contract, bridge dispatch table, detail orchestration
 │   ├── render.py               RenderMixin — full renders, section rebuilds, header counts, lazy-load serving
-│   ├── refresh.py              RefreshMixin — targeted refreshes, apply_local_move, sync_external_changes, refresh_units
+│   ├── refresh.py              RefreshMixin — targeted refreshes, refresh_note, sync_external_changes, _refresh_modified
 │   ├── builder.py              PageBuilder + RenderContext + EAGER_RENDER_LIMIT + IO-group helpers
 │   ├── details.py              Detail-overlay HTML assembly (single card / IO group / note group)
 │   ├── actions.py              Card mutations + prompt dialogs (scheduling, tags, change-deck, delete)
@@ -54,7 +54,7 @@ card-browser/
 │   └── style.py                Qt stylesheet + toolbar SVG icons
 ├── web/                    CSS + JS for the webview
 │   ├── tray.css                Styles
-│   └── js/                     10_mode_menus.js … 80_updates.js — concatenated in name order into one script
+│   └── js/                     10_mode_menus.js … 90_toast.js — concatenated in name order into one script
 ├── docs/
 │   ├── ARCHITECTURE.md      This file
 │   └── CONTRIBUTING.md      Code walkthrough for contributors
@@ -181,7 +181,7 @@ snapshots in `sync.py`. State contract (owned here, used by both mixins):
   (any `CARD_ACTIONS` name, or `flag_N`) are matched separately and routed to
   `_on_card_action`.
 - **Card-level handlers**: `_on_card_action` (single unit), `_on_bulk_action`
-  (multiselect bar — see *Multiselect*), `_on_move_cards`/`_move_cids`
+  (multiselect bar — see *Multiselect*), `_on_move_cards`
   (drag-and-drop — see *Drag & Drop*), `_on_delete_card`.
 - **Detail overlay orchestration**: `_push_card_detail` / `_push_note_detail`
   build and `eval` the overlay; `_refresh_open_detail` re-pushes it after an
@@ -205,8 +205,11 @@ snapshots in `sync.py`. State contract (owned here, used by both mixins):
   overlay + selection bar + script) with the current edit/view mode baked in, and
   optionally restores the saved scroll anchor after load.
 - **`refresh_section(deck_id)`**: rebuilds one deck section in place and updates
-  ancestor header counts; falls back to a full render if the section is now
-  entirely filtered out.
+  ancestor header counts; renders eagerly (full card HTML, not placeholders)
+  when the section is small enough (≤ `EAGER_RENDER_LIMIT`) even on an
+  otherwise-lazy page, so a targeted rebuild can't collapse already-loaded
+  cards into placeholders and throw the viewport; falls back to a full render
+  if the section is now entirely filtered out.
 - **Header counts and title**: `_refresh_header_counts`, `_refresh_all_header_counts`,
   `_update_title` fetch metadata once per call and thread it through every
   affected header.
@@ -225,13 +228,17 @@ proven correct.
 - **`refresh_note(col, nid, cids)`**: re-renders every on-screen shape a note's
   cards render as (cards can span sections, producing several groups and/or
   standalone cards), then updates counts/title once.
-- **`refresh_units(col, lead_cids)`**: refreshes several rendered units after a
-  bulk mutation (multiselect bar actions) — one render when filters are active or
-  the selection exceeds 25 units, targeted replaces otherwise.
-- **`apply_local_move(col, lead_cids, moved_cids, src_dids, target_did)`**: the
-  localized drag-drop/bulk-change-deck update — see *Drag & Drop*.
+- **`_refresh_modified(col, structural_handled=False)`**: resolves the notes an
+  op's mod-time watermark says changed (`consume_modified`) and
+  `refresh_note()`s each one — works no matter where the edit came from. Falls
+  back to a full render for bulk changes, or when nothing matches the
+  watermark (undo restores old mod times).
 - **`sync_external_changes(col)`**: diffs the tree's cid→deck map against the
-  render snapshot (see *Refresh Strategy*).
+  render snapshot and spot-applies membership changes — additions, removals,
+  and moves, including our own (see *Refresh Strategy*).
+- **`consume_modified` / `refresh_tree`**: thin wrappers — `consume_modified`
+  scopes `ChangeTracker.consume_modified` to the rendered tree; `refresh_tree`
+  triggers a full (scroll-preserving) re-render of the current tree.
 
 **`builder.py`** — **`PageBuilder`**: owns the per-render group maps (`io_groups`,
 `note_groups`: lead cid → member cids) and turns collection data into the tray's
@@ -283,10 +290,10 @@ criteria, once over the whole subtree) and `order_cids` (per-section sort).
 **`sync.py`** — **`ChangeTracker`**: the two per-render snapshots that answer
 "what exactly changed" when Anki's `OpChanges` only says *that* something did.
 - `known_cards` (cid → deck id) and `mod_watermark`, set by `snapshot()`.
-- `record_move(cids, target_did)` — keeps the snapshot in step with our own local
-  moves, so the next external-change diff doesn't re-apply them as if external.
-- `forget(cids)` — drops deleted cards from the snapshot.
-- `diff_membership(current)` → `(added, removed, moved, previous)`.
+- `diff_membership(current)` → `(added, removed, moved, previous)` — also
+  adopts *current* as the new `known_cards` snapshot, so it doubles as the
+  record step: our own moves/adds/removes fold in exactly like an external
+  change would, and the next diff won't re-report them.
 - `consume_modified(col, tree_deck_ids)` — in-tree cards/notes modified since the
   last sweep (scoped via the indexed `cards.did` column), then advances the
   watermark.
@@ -317,7 +324,9 @@ It wires signals between components: clicking a sidebar deck scrolls the tray;
 scrolling the tray highlights the sidebar; creating/deleting subdecks refreshes both.
 
 **Filter toolbar (Row 1):** content search (`QLineEdit`, 300 ms debounce) and state
-filter chips (`New` | `Learning` | `Due` | `Upcoming` | `Suspended`).
+filter chips (`New` | `Learning` | `Due` | `Upcoming` | `Suspended`). A direct
+filter change (chip click, sort change, "Clear all filters") stops a pending
+debounce timer first, so a search-then-click can't render the page twice.
 
 **Filter toolbar (Row 2):** "Filters" toggle (opens the advanced panel), an active-
 filter summary label, the sort dropdown (10 modes) and an asc/desc direction toggle.
@@ -382,39 +391,62 @@ one script (see `assets.py` above):
 - **`70_select.js`** — multiselect: `toggleSelect`, `_selectRangeTo` (shift-click
   range), `clearSelection`, `updateSelectionBar`, `selectionAction` (sends
   `bulk:<action>:<ids>`). See *Multiselect*.
-- **`80_updates.js`** — targeted DOM updates (`replaceCard` / `removeCard` /
-  `replaceGroup` / `removeGroup` / `replaceSection`, `updateHeaderCounts`) and
-  section-anchored scroll save/restore.
+- **`80_updates.js`** — targeted DOM updates: `_cardEl`/`_groupEl` give
+  `replaceCard`/`removeCard` and `replaceGroup`/`removeGroup` separate,
+  card-shaped vs. group-shaped lookups, so a card op can't tear out a whole
+  note group whose lead shares the cid; removing a unit purges it from the
+  JS selection set and updates the selection bar; `replaceSection` re-applies
+  the live selection to the rebuilt subtree (`_reapplySelection`, see
+  `70_select.js`); `moveUnit` relocates a unit's element into another
+  section's card container (silent cross-section moves — see *Drag & Drop*);
+  plus `updateHeaderCounts` and section-anchored scroll save/restore.
+- **`90_toast.js`** — `showToast`: transient in-page action feedback
+  (bottom-center pill, auto-hides), evaled from op success callbacks.
 
 ## Refresh Strategy
 
 The browser keeps itself in sync without full page reloads wherever possible.
 
-- **The add-on's own mutations** (suspend, review-now, delete, scheduling, bulk
-  actions, drag-drop moves) call the backend directly and update the DOM with a
-  targeted `eval` — they do **not** go through `CollectionOp`, so they don't fire
-  `operation_did_execute`.
-- **External changes** (Anki's Browser, Add Cards, undo, other add-ons) fire
-  `operation_did_execute`, handled by `CardBrowserWidget._on_operation_did_execute`
-  (`viewer/widget.py`). `OpChanges` only says *that* something changed (boolean
-  flags, no ids), so the tray keeps two snapshots per render to work out *what*
-  changed (`tray/sync.py::ChangeTracker`): a **`cid → deck id` map** (membership)
-  and a **`mod`-time watermark** (content; queried over the rendered tree via the
-  indexed `cards.did` column, not a whole-table scan). The handler runs, in order:
-  1. not visible → defer a full refresh to the next `showEvent`;
-  2. `changes.deck` / `changes.notetype` → repopulate the deck dropdown and fully
-     re-render (renames keep ids but change labels/templates);
-  3. `CardTray.sync_external_changes()` → diff the membership map: sections that
-     gained cards are rebuilt in place, both ends of a deck move are rebuilt,
-     removed cards are dropped from the DOM. Falls back to one full re-render for
-     bulk changes (>40), active filters, or changes touching a rendered group;
-  4. `changes.card` / `changes.note` → `_refresh_modified()`: ask the watermark
-     which cards/notes actually changed and `refresh_note()` each one in place —
-     this works no matter where the edit came from. If nothing matches the
-     watermark (undo restores old mod times) or the change is bulk-sized, fall
-     back to a full re-render.
-  The whole handler is wrapped so any targeted-refresh edge case converges to a
-  full (scroll-preserving) re-render instead of leaving a stale view.
+- **One op-driven pipeline serves every mutation.** The add-on's own mutations
+  (suspend, review-now, delete, scheduling, bulk actions, drag-drop moves) all
+  run through `CollectionOp` (`tray/actions.py::_start_op`) — exactly like
+  edits from Anki's own Browser, Add Cards, undo, or other add-ons — so both
+  fire `operation_did_execute` and there's no separate "our own mutations"
+  path to keep in sync. As a bonus, our own ops get native undo entries for
+  free; success feedback is an in-page toast (`showToast`, evaled from the
+  op's success callback — see `web/js/90_toast.js`) rather than Anki's native
+  tooltip window, which looks foreign over the styled grid. Two handlers are
+  registered on the hook, split by what changed:
+  - `CardBrowserWidget._on_operation_did_execute` (`viewer/widget.py`) handles
+    `changes.deck` / `changes.notetype` — repopulates the deck dropdown and
+    fully re-renders (renames keep ids but change labels/templates).
+  - `CardTray._on_operation_did_execute` (`tray/tray.py`) handles everything
+    else (`changes.card` / `changes.note` / `changes.study_queues`).
+    `OpChanges` only says *that* something changed (boolean flags, no ids), so
+    the tray keeps two snapshots per render to work out *what*
+    changed (`tray/sync.py::ChangeTracker`): a **`cid → deck id` map** (membership)
+    and a **`mod`-time watermark** (content; queried over the rendered tree via the
+    indexed `cards.did` column, not a whole-table scan). It runs, in order:
+    1. not visible → defer a full refresh to the next `showEvent`;
+    2. `sync_external_changes()` → diff the membership map: sections that
+       gained new cards are rebuilt in place, moved units have their rendered
+       element *relocated* into the target section (`moveUnit`, anchored at
+       the render-order position — no rebuild, no flash), removed cards are
+       dropped from the DOM. Falls back to one full re-render for bulk
+       changes (>40), active filters, removals touching a rendered group or
+       partial-group moves (a group moving whole travels as one unit), or
+       adds/move targets in the root deck's own card area;
+    3. unless membership was already fully re-rendered, `changes.card` /
+       `changes.note` → `_refresh_modified()`: ask the watermark which
+       cards/notes actually changed and `refresh_note()` each one in place —
+       this works no matter where the edit came from. If nothing matches the
+       watermark (undo restores old mod times) or the change is bulk-sized,
+       fall back to a full re-render;
+    4. `_refresh_open_detail()` re-pushes the open detail overlay so it can't
+       go stale from an action that changed its unit, closing it if the unit
+       vanished.
+    The whole handler is wrapped so any targeted-refresh edge case converges to a
+    full (scroll-preserving) re-render instead of leaving a stale view.
 - **Sync** (`sync_did_finish`) → full refresh. Synced changes carry their original
   remote mod times, so the watermark can't see them.
 - **Embedded mode** additionally re-hides Anki's content on
@@ -435,8 +467,9 @@ actual top-level deck change resets to the top.
   run after the DOM is ready.
 - `eval(js)` — targeted updates: `fillCards`, `fillNoteCards`, `fillCardPreview`,
   `replaceCard`, `replaceGroup`, `replaceSection`, `removeCard`, `removeGroup`,
-  `updateHeaderCounts`, `setEditMode`, `scrollToSection`, `restoreScroll`,
-  `showCardDetail`, `closeOverlay`, `clearSelection`.
+  `moveUnit`, `updateHeaderCounts`, `setEditMode`, `scrollToSection`,
+  `restoreScroll`, `showCardDetail`, `closeOverlay`, `clearSelection`,
+  `showToast`.
 
 ### JavaScript → Python (`pycmd('action:payload')`, dispatched by `_on_bridge_cmd`)
 
@@ -448,7 +481,7 @@ actual top-level deck change resets to the top.
 | `lazy_load` | cids | Renders cards/groups and injects via `fillCards()` |
 | `lazy_load_note_cards` | cids | Renders a note group's individual cards |
 | `preview_card` | cid | Renders a card's answer into the overlay preview |
-| `card_detail` | cid | Builds the detail overlay for a card / IO group (dispatches to the note-group detail instead when `cid` is a group lead); answers with `showCardDetail(html, id)` |
+| `card_detail` | cid | Builds the detail overlay for a card / IO group (dispatches to the note-group detail instead when `cid` is a group lead); answers with `showCardDetail(html, id, isRefresh)` |
 | `note_detail` | lead cid | Builds the detail overlay for a note group (fields, card-preview select, stats) |
 | `detail_closed` | `1` | JS closed the overlay — stop pushing detail refreshes |
 | `move_cards` | `deck_id:cids` | Drag-and-drop: moves the unit(s) to the deck (group leads expand to their members; dragging a selected unit moves the whole selection) — see *Drag & Drop* |
@@ -540,16 +573,20 @@ selection) and `DeckTree.edit_mode` (`decks/sidebar.py`, gates the context menu)
 Clicking any card or group opens a full inspector overlay instead of a plain
 enlarged view. JS sends `card_detail` / `note_detail`; Python builds the whole
 overlay body (`tray/details.py` + `rendering/detail.py::build_detail_html`) and
-answers with `showCardDetail(html, id)`. The overlay card is sized
-`min(920px, 92vw)` — noticeably larger than the inline card frames — so field
-tables and stats have room without wrapping awkwardly.
+answers with `showCardDetail(html, id, isRefresh)` — op-driven re-pushes carry
+`isRefresh=true`, and JS drops one whose id no longer matches the shown
+overlay, so a refresh racing the close animation can't reopen it. The overlay
+card is sized `min(920px, 92vw)` — noticeably larger than the inline card
+frames — so field tables and stats have room without wrapping awkwardly.
 
 - **Header** — flag dot, deck path, state badge, notetype · template line, tags.
 - **Action bar** (edit mode only) — edit, flag swatches, suspend/bury, review
   now, set due, forget, reposition (new cards), add tag, change deck, delete.
   Actions go through the same bridge commands as the card menus; the tray
-  tracks the open overlay (`_open_detail`) and pushes a refreshed detail after
-  each action, so the overlay always reflects the card's current state.
+  tracks the open overlay (`_open_detail`) and the op pipeline's
+  `_refresh_open_detail` pushes a refreshed detail after each action (marked
+  `isRefresh` so a push racing the close animation is dropped, not reopened),
+  so the overlay always reflects the card's current state.
 - **Content** — single cards get a Question/Answer toggle; IO groups get the
   masked image; note groups get the field table plus a per-card preview select.
 - **Stats grid** — due (date + countdown), interval, ease, reviews, lapses,
@@ -586,11 +623,10 @@ expanded members.
   the same helpers the single-card menus use) then apply;
 - any other action (`flag_N`, suspend, unsuspend, bury, unbury, forget, …) goes
   through `actions.apply_scheduling_action`;
-- refreshes via `refresh_units()` (`tray/refresh.py`): replaces each affected unit
-  in place, unless filters are active or the selection exceeds 25 units, in which
-  case one full render is cheaper and equally correct;
-- `eval`s `clearSelection()` once the mutation actually applied — a cancelled
-  prompt leaves the selection untouched.
+- every action runs its own `CollectionOp`; the refresh comes solely from the
+  op pipeline (see *Refresh Strategy*) — there is no bulk-specific refresh path;
+- `eval`s `clearSelection()` once an op actually started — a cancelled prompt
+  leaves the selection untouched.
 
 Dragging a unit that's part of the current selection drags the **whole
 selection** (`web/js/60_dnd.js` checks `_selected` before falling back to just
@@ -599,39 +635,51 @@ same `move_cards` bridge command as a single-card drag (see *Drag & Drop*).
 
 Selection is cleared by: **Esc** (only when the detail overlay isn't already
 open — Esc closes the overlay first if one is showing); **leaving edit mode**
-(`setEditMode(false)` calls `clearSelection()`); and after a bulk action actually
-mutates the collection. Targeted DOM replacements (`replaceCard`/`replaceGroup`
-in `web/js/80_updates.js`) re-apply the `.selected` class to the new element
-when its id was selected, so a scheduling refresh can't silently drop a unit out
-of the user's selection.
+(`setEditMode(false)` calls `clearSelection()`); and after a bulk action or a
+drag-drop move actually starts an op. Targeted DOM updates keep the live
+selection in step with whatever the op pipeline rebuilds: `replaceCard`/
+`replaceGroup` (`web/js/80_updates.js`) re-apply `.selected` to the new
+element when its id was selected; `replaceSection` re-applies it across the
+whole rebuilt subtree (`_reapplySelection`, `web/js/70_select.js`); a
+placeholder that fills in via `fillCards` (`web/js/40_lazy.js`) does the same
+for its unit; and `removeCard`/`removeGroup` purge a deleted/moved-out id from
+the selection and refresh the selection bar — so a targeted refresh can never
+silently leave the selection stale.
 
 ## Drag & Drop
 
 Card frames and note groups are HTML5-draggable (edit mode only). Dragging a
 unit that's part of the current multiselect drags the whole selection instead
 (see *Multiselect*). Deck section headers (and the root header) accept drops;
-dropping sends `move_cards:<deck_id>:<lead cids>` and Python moves the whole
-unit(s) (group leads expand to their members, via `tray/actions.py::move_cards`)
-then updates the page. Filtered (dyn) decks are refused as targets
-(`resolve_normal_deck`).
+dropping sends `move_cards:<deck_id>:<lead cids>`, handled by
+`CardTray._on_move_cards` (`tray/tray.py`): it expands each lead to its full
+group membership (`PageBuilder.expand_group_cids`) and calls
+`tray/actions.py::move_cards`, which refuses filtered (dyn) decks as targets
+(`resolve_normal_deck`) and otherwise runs a `set_deck` `CollectionOp`.
 
-The page update is **localized**: `CardTray._move_cids` → `RefreshMixin
-.apply_local_move` (`tray/refresh.py`) removes the moved unit(s) from the DOM,
-rebuilds only the section they landed in (`refresh_section`), and updates the
-source deck(s)' and ancestors' header counts — no page reload, scroll untouched.
-It falls back to one full (scroll-preserving) re-render whenever the targeted
-path can't be proven correct:
-- active filters — the target section might not even be in the DOM (filtered
-  out), so there's nothing to rebuild into;
-- the move touches the tree root's own card area — that renders as a bare card
-  grid, not a rebuildable section;
-- the target deck isn't in the rendered tree (defensive; drops only ever target
-  in-tree headers).
+The page update comes from the same op pipeline as every other mutation (see
+*Refresh Strategy*): the `set_deck` op fires `operation_did_execute`, and
+`sync_external_changes()` (`tray/refresh.py`) diffs the membership map and
+**relocates the moved unit's DOM node** into the target section (`moveUnit`
+in `web/js/80_updates.js`) — neither section rebuilds, so nothing re-mounts
+or flashes, and the node keeps its lazy observer and selection state for
+free. Python computes the unit's render-order position in the target
+(`_apply_unit_moves`: own cids + active sort) and passes the following cids
+as anchor candidates; units are applied in reverse render order so one moved
+unit can anchor on another. Header counts refresh separately (count-only
+evals). It falls back to one full (scroll-preserving) re-render whenever the
+targeted path can't be proven correct: a bulk-sized change (>40 cards),
+active filters (the target section might not even be in the DOM), a group
+moving only partially or scattering to several decks (stale group maps — a
+group moving whole travels as one unit), or a move *into* the tree root's
+own card area (a bare card grid, not an addressable section; moves out of it
+relocate like any other). `_on_move_cards` `eval`s `clearSelection()` once
+the op actually starts.
 
-Either way, `ChangeTracker.record_move` keeps the membership snapshot in step
-with the move, so the next external-change diff (`sync_external_changes`)
-doesn't mistake our own move for an external one (undo still shows up as a diff
-and is spot-applied).
+The move needs no special-casing in the membership diff: `ChangeTracker
+.diff_membership` adopts the live cid→deck map as its new snapshot on every
+call, so our own move folds in exactly like an external change would (undo
+still shows up as a diff and is spot-applied).
 
 Two platform quirks are handled: in-page HTML5 drags re-enter the widget as
 native Qt drops, so `TrayWebView.dragEnterEvent` (`tray/webview.py`) allows drops
@@ -664,10 +712,12 @@ apps) are additionally refused by the page's own dragover/drop handlers
 - **IO grouping** — Image Occlusion cards sharing a note render as one visual card
   with an SVG overlay, reducing DOM nodes.
 - **Targeted DOM updates** — scheduling/edit/delete actions, bulk multiselect
-  actions, drag-drop moves (`apply_local_move`), and external-change refreshes
-  all replace just the affected element(s), preserving scroll and avoiding
-  full-page flashes; only filtered views, bulk-sized changes, or moves touching
-  the tree root fall back to a full render.
+  actions, drag-drop moves, and external changes all funnel through the same
+  op-driven pipeline (`sync_external_changes` / `_refresh_modified` in
+  `tray/refresh.py`), which replaces just the affected element(s), preserving
+  scroll and avoiding full-page flashes; only filtered views, bulk-sized
+  changes, or changes touching the tree root or a rendered group fall back to
+  a full render.
 
 ## Testing
 

@@ -335,6 +335,9 @@ class CardBrowserWidget(QWidget):
 
     def _apply_filters(self) -> None:
         """Gather current filter/sort state and push to the tray."""
+        # A chip click / sort change / clear-all landing while the search
+        # debounce is pending must not render the same page twice.
+        self._search_timer.stop()
         search_text = self._card_search.text().strip()
         active_chips = {k for k, btn in self._chip_buttons.items() if btn.isChecked()}
         tag_filter = self._tag_combo.currentData() or ""

@@ -56,10 +56,10 @@ UX, UI, code risks, and structural improvements. Effort tags: [S]mall (≤½ day
 
 ## 2 · UX improvements
 
-- **Action feedback (toasts)** [S] — every mutation is currently silent. A
-  small in-page toast ("2 cards suspended", "Moved to *Biology::Cell*") makes
-  bulk operations trustworthy. Pairs with the CollectionOp migration below
-  (Anki then shows its own toasts + undo).
+- **Action feedback (toasts)** [DONE 2026-07-07] — every op success shows an
+  in-page toast ("Suspended 2 cards", "Moved 1 card to *Biology::Cell*"),
+  styled with the browser (`web/js/90_toast.js`). Replaced Anki's native
+  tooltip window, which looked foreign over the grid (owner: "very ugly").
 - **Visible undo** [M] — an Undo button/shortcut in the browser (calls
   `mw.undo()`); the existing external-change pipeline already repaints after
   undo. Best delivered via the CollectionOp migration (§5) so labels are right.
@@ -137,10 +137,16 @@ HANDOFF.md.)
 
 ### Findings from the dedicated refresh/state audit (2026-07-06)
 
-> **Status update:** the CollectionOp migration (§5) shipped 2026-07-06 and
-> resolved findings 3, 4 and 5 by construction (tests in
-> tests/test_op_pipeline.py). Findings 1, 2, 6, 7, 8, 9 remain — they are
-> the residual state-sync batch.
+> **Status update:** all nine findings are resolved. The CollectionOp
+> migration (§5) shipped 2026-07-06 and resolved findings 3, 4 and 5 by
+> construction (tests in tests/test_op_pipeline.py). The residual state-sync
+> batch (findings 1, 2, 6, 7, 8, 9) shipped 2026-07-07 with regression tests
+> (tests/test_dom_state_sync.py plus additions to the render/overlay/viewer
+> test files). Note the fixes adapted to the migrated code: finding 1's
+> Python half (clearSelection on drag/delete) had already landed with the
+> migration, so only the JS-side purge remained; finding 2 was fixed by
+> splitting the JS unit lookup per shape (removeCard/replaceCard match card
+> frames, removeGroup/replaceGroup match group frames).
 
 Ordered by user-visible impact; all verified against the code. Most are [S]
 fixes and should ship as one "state-sync batch" before new features.
@@ -219,11 +225,10 @@ fixes and should ship as one "state-sync batch" before new features.
 
 ## Suggested sequencing
 
-1. **State-sync batch** [~1 session, do first]: the nine audit findings
-   above — they are exactly the "weird reloading" class, most are small,
-   and several were introduced by the new multiselect/localized-move
-   features interacting with older machinery. Add regression tests per fix
-   (the level-2/level-3 harness covers all of them).
+1. **State-sync batch** [DONE 2026-07-07]: the nine audit findings above —
+   they were exactly the "weird reloading" class. Findings 3-5 fell out of
+   the CollectionOp migration; 1/2/6/7/8/9 shipped as one batch with
+   regression tests at every level.
 2. **Quick wins batch** [~1 session]: toasts, tag-dropdown staleness fix,
    selection-bar padding, collapse/expand all, filter chips, revlog in
    detail, select-all, saved searches, overlay chrome pinning.

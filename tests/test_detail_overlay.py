@@ -37,6 +37,20 @@ def test_card_action_refreshes_open_detail(tray, fake_mw):
     assert "Unsuspend" in evals[0]  # refreshed detail reflects the new state
 
 
+def test_refresh_push_is_marked_as_refresh(tray, fake_mw):
+    """Op-driven re-pushes carry isRefresh=true so the JS drops them if they
+    race the close animation; user-initiated opens carry false and always
+    win."""
+    cids = fake_mw.col._test_cids
+    tray._web.reset_log()
+    tray._on_bridge_cmd(f"card_detail:{cids['apple']}")
+    assert _detail_evals(tray)[0].endswith(", false)")
+
+    tray._web.reset_log()
+    tray._on_bridge_cmd(f"suspend:{cids['apple']}")
+    assert _detail_evals(tray)[0].endswith(", true)")
+
+
 def test_detail_closed_clears_state(tray, fake_mw):
     cids = fake_mw.col._test_cids
     tray._on_bridge_cmd(f"card_detail:{cids['apple']}")

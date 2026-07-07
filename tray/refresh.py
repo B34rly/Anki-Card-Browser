@@ -13,8 +13,15 @@ from __future__ import annotations
 import json
 
 from anki.cards import CardId
+from anki.decks import DeckId
 
-from ..core.card_data import get_card_decks, get_deck_cards, get_note_cards
+from ..core.card_data import (
+    get_card_decks,
+    get_cards_metadata,
+    get_deck_cards,
+    get_note_cards,
+)
+from .filters import order_cids
 
 
 class RefreshMixin:
@@ -166,16 +173,17 @@ class RefreshMixin:
     # ── Membership changes (adds / removals / moves — ours or external) ──
 
     def sync_external_changes(self, col) -> str:
-        """Spot-apply external membership changes by diffing the tree's cards.
+        """Spot-apply membership changes by diffing the tree's cards.
 
         Compares the subtree's current cid→deck map against the snapshot from
-        the last render: sections that gained cards (adds, moves in) are
-        rebuilt in place, sections that lost moved cards are rebuilt too, and
-        removed cards are dropped from the DOM. Falls back to one full
-        re-render (scroll also preserved) when that is cheaper or safer: bulk
-        changes, active filters (membership must be re-derived), a change
-        touching a rendered group (stale group maps), or an add landing in
-        the root deck's own card area (no standalone section to rebuild).
+        the last render: sections that gained new cards (adds) are rebuilt in
+        place, moved units have their rendered element relocated into the
+        target section (moveUnit — no rebuild, no flash), and removed cards
+        are dropped from the DOM. Falls back to one full re-render (scroll
+        also preserved) when that is cheaper or safer: bulk changes, active
+        filters (membership must be re-derived), removals touching a rendered
+        group or partial-group moves (stale group maps), or adds/move targets
+        in the root deck's own card area (no standalone section to address).
 
         Returns what happened, so the caller can plan follow-up refreshes:
         ``"full"`` (full re-render done, everything is fresh), ``"spot"``
@@ -205,23 +213,32 @@ class RefreshMixin:
         if self._filters.active:
             return full()
 
-        # A removed/moved card that was rendered inside an IO or note group
-        # needs its group rebuilt, but the group maps are now stale.
-        if removed or moved:
+        # A removed card that was rendered inside an IO or note group needs
+        # its group rebuilt, but the group maps are now stale. Moves are
+        # finer-grained: a group moving whole (to one target) keeps its
+        # membership — and the maps — intact and travels as one unit, so
+        # only partial-group moves force the full render.
+        if removed:
             grouped = self._builder.grouped_cids()
-            if any(c in grouped for c in removed) or any(c in grouped for c in moved):
+            if any(c in grouped for c in removed):
                 return full()
-
-        # Sections to rebuild: where added cards landed, and both ends of a
-        # move.
-        sections: set[int] = set()
-        for c in added:
-            sections.add(current[c])
-        for c in moved:
-            sections.add(current[c])
-            sections.add(previous[c])
-        if self._tree_root.deck_id in sections:
+        move_units = self._plan_unit_moves(moved, current)
+        if move_units is None:
             return full()
+
+        # Sections to rebuild: where added cards landed (their HTML doesn't
+        # exist yet). Moves need no rebuild — the rendered element relocates
+        # (moveUnit), which is what keeps drags silent. The root deck's own
+        # card area isn't an addressable section, so anything landing there
+        # falls back.
+        sections = {current[c] for c in added}
+        if self._tree_root.deck_id in sections | {t for _, _, t in move_units}:
+            return full()
+
+        # Moves first: a section rebuild renders from the live collection,
+        # so rebuilding a move's source/target afterwards can only agree
+        # with (or supersede) the relocation — never duplicate it.
+        self._apply_unit_moves(col, move_units)
         for did in sections:
             self.refresh_section(did)
 
@@ -230,3 +247,67 @@ class RefreshMixin:
 
         self._refresh_all_header_counts(col)
         return "spot"
+
+    def _plan_unit_moves(self, moved, current) -> list[tuple[str, int, int]] | None:
+        """Fold moved cids into whole rendered units: (kind, lead, target).
+
+        Returns None when the fold isn't clean — some rendered group moved
+        only partially, or its cards scattered to different decks — which
+        leaves the group maps stale and requires a full render.
+        """
+        units: list[tuple[str, int, int]] = []
+        in_groups: set[int] = set()
+        for group_map in (self._builder.io_groups, self._builder.note_groups):
+            for lead, members in group_map.items():
+                touched = [m for m in members if m in moved]
+                if not touched:
+                    continue
+                targets = {current[m] for m in touched}
+                if len(touched) != len(members) or len(targets) != 1:
+                    return None
+                units.append(("group", lead, targets.pop()))
+                in_groups.update(members)
+        units.extend(("card", c, current[c]) for c in moved if c not in in_groups)
+        return units
+
+    def _apply_unit_moves(self, col, units) -> None:
+        """Relocate each moved unit's DOM node into its target section.
+
+        For every target deck the intended order is computed the same way a
+        fresh render would (own cids + active sort); the JS then anchors the
+        node on the first following unit already in that container. Units
+        are applied in reverse render order so a unit whose anchor is
+        another moved unit finds it already in place.
+        """
+        by_target: dict[int, list[tuple[str, int]]] = {}
+        for kind, lead, target in units:
+            by_target.setdefault(target, []).append((kind, lead))
+
+        today = col.sched.today
+        for target, target_units in by_target.items():
+            own = list(col.decks.cids(DeckId(target), children=False))
+            meta = get_cards_metadata(col, own)
+            ordered = order_cids(own, meta, today, self._filters)
+            index = {cid: i for i, cid in enumerate(ordered)}
+
+            def unit_pos(unit: tuple[str, int]) -> int:
+                kind, lead = unit
+                members = self._unit_members(kind, lead)
+                return min((index.get(m, len(ordered)) for m in members),
+                           default=len(ordered))
+
+            for kind, lead in sorted(target_units, key=unit_pos, reverse=True):
+                members = set(self._unit_members(kind, lead))
+                after = [c for c in ordered[unit_pos((kind, lead)) + 1:]
+                         if c not in members][:20]
+                self._web.eval(
+                    f"moveUnit({lead}, {json.dumps(kind)}, {target}, "
+                    f"{json.dumps(after)})"
+                )
+
+    def _unit_members(self, kind: str, lead: int) -> list[int]:
+        """The cids a rendered unit spans (a lone card, or its group's cards)."""
+        if kind == "group":
+            return (self._builder.io_groups.get(lead)
+                    or self._builder.note_groups.get(lead, [lead]))
+        return [lead]

@@ -205,6 +205,10 @@ class CardTray(QWidget, RenderMixin, RefreshMixin):
             self._needs_refresh_on_show = False
             self.refresh_tree()
 
+    def show_toast(self, msg: str) -> None:
+        """Transient in-page feedback (bottom-center pill, auto-hides)."""
+        self._web.eval(f"showToast({json.dumps(msg)})")
+
     def _notify_tree_changed(self) -> None:
         """Tell the viewer the deck structure changed.
 
@@ -427,7 +431,7 @@ class CardTray(QWidget, RenderMixin, RefreshMixin):
     def _on_detail_closed(self, col, payload: str) -> None:
         self._open_detail = None
 
-    def _push_card_detail(self, col, cid: int) -> bool:
+    def _push_card_detail(self, col, cid: int, is_refresh: bool = False) -> bool:
         """Build and show the detail overlay for a single card or IO group."""
         try:
             if cid in self._builder.io_groups:
@@ -437,10 +441,10 @@ class CardTray(QWidget, RenderMixin, RefreshMixin):
         except Exception:
             return False  # the unit vanished; leave the page as it is
         self._open_detail = ("card", cid)
-        self._web.eval(f"showCardDetail({json.dumps(html)}, {cid})")
+        self._eval_show_detail(html, cid, is_refresh)
         return True
 
-    def _push_note_detail(self, col, lead_cid: int) -> bool:
+    def _push_note_detail(self, col, lead_cid: int, is_refresh: bool = False) -> bool:
         """Build and show the detail overlay for a multi-card note group."""
         try:
             html = details.build_note_detail(
@@ -449,8 +453,15 @@ class CardTray(QWidget, RenderMixin, RefreshMixin):
         except Exception:
             return False
         self._open_detail = ("note", lead_cid)
-        self._web.eval(f"showCardDetail({json.dumps(html)}, {lead_cid})")
+        self._eval_show_detail(html, lead_cid, is_refresh)
         return True
+
+    def _eval_show_detail(self, html: str, unit_id: int, is_refresh: bool) -> None:
+        # is_refresh lets the JS drop a push that races the close animation
+        # (the page already closed the overlay but its detail_closed message
+        # hasn't reached us yet — accepting the push would reopen it).
+        flag = "true" if is_refresh else "false"
+        self._web.eval(f"showCardDetail({json.dumps(html)}, {unit_id}, {flag})")
 
     def _refresh_open_detail(self, col) -> None:
         """Re-push the open detail overlay after an action changed its unit.
@@ -464,8 +475,8 @@ class CardTray(QWidget, RenderMixin, RefreshMixin):
             return
         kind, oid = self._open_detail
         ok = (
-            self._push_note_detail(col, oid) if kind == "note"
-            else self._push_card_detail(col, oid)
+            self._push_note_detail(col, oid, is_refresh=True) if kind == "note"
+            else self._push_card_detail(col, oid, is_refresh=True)
         )
         if not ok:
             self._open_detail = None
