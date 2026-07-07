@@ -87,6 +87,13 @@ body {
     color: color-mix(in srgb, CanvasText 60%, Canvas);
     white-space: nowrap;
     flex-shrink: 0;
+    /* The strip passes pointer events through (so the frame stays the click
+       target between pills); the pills themselves are click-to-filter. */
+    pointer-events: auto; cursor: pointer;
+}
+.card-tag:hover {
+    background: color-mix(in srgb, Highlight 18%, Canvas);
+    color: CanvasText;
 }
 
 /* ── IO grouped card ── */
@@ -161,14 +168,19 @@ body {
     background: rgba(0,0,0,0.55);
     backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
 }
+/* The card itself never scrolls — the inner content does — so the close
+   button and nav arrows (absolute children of the card) stay pinned to its
+   edges no matter how long the content is. */
 #overlay-card {
     background: Canvas; color: CanvasText; border-radius: 12px;
     padding: 30px 36px; max-width: 92vw; max-height: 90vh;
-    overflow: auto; position: relative;
+    overflow: hidden; position: relative;
+    display: flex; flex-direction: column;
     box-shadow: 0 8px 40px rgba(0,0,0,0.3);
     transform: scale(0.9); opacity: 0;
     transition: transform 0.25s ease, opacity 0.25s ease;
 }
+#overlay-card-content { overflow: auto; min-height: 0; }
 #overlay.visible #overlay-card {
     transform: scale(1); opacity: 1;
 }
@@ -223,6 +235,7 @@ body.overlay-open { overflow: hidden; padding-right: var(--scrollbar-w, 0px); }
 .detail-content .detail-side { display: none; }
 .detail-content.show-q .detail-q { display: block; }
 .detail-content.show-a .detail-a { display: block; }
+.detail-content.show-f .detail-f { display: block; }
 .detail-body {
     margin: 4px 0 16px; padding: 16px;
     font-size: 15px; line-height: 1.55;
@@ -245,6 +258,55 @@ body.overlay-open { overflow: hidden; padding-right: var(--scrollbar-w, 0px); }
     letter-spacing: 0.05em; color: GrayText;
 }
 .ds-value { font-size: 14px; font-weight: 600; }
+/* ── In-place field editing (part of the detail view) ── */
+#detail-fields { margin-bottom: 16px; }
+#detail-fields .edit-field-label {
+    font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.05em; color: GrayText;
+    margin: 10px 0 4px;
+}
+#detail-fields .edit-field {
+    padding: 10px 12px;
+    font-size: 14px; line-height: 1.5;
+    border: 1px solid color-mix(in srgb, CanvasText 15%, Canvas);
+    border-radius: 6px;
+    background: color-mix(in srgb, CanvasText 2%, Canvas);
+    min-height: 1.5em;
+    cursor: text;
+}
+#detail-fields .edit-field:focus {
+    outline: none;
+    border-color: Highlight;
+    box-shadow: 0 0 0 3px color-mix(in srgb, Highlight 20%, transparent);
+}
+/* Revert/Save appear on the first keystroke — the popup stays calm while
+   you're just reading. */
+.edit-form-actions {
+    display: none; gap: 8px; justify-content: flex-end;
+    margin-top: 12px;
+}
+#detail-fields.dirty .edit-form-actions { display: flex; }
+.edit-save {
+    border-color: Highlight;
+    background: color-mix(in srgb, Highlight 12%, Canvas);
+}
+.edit-save-hint { font-size: 10px; color: GrayText; margin-left: 4px; }
+
+.detail-history { margin-top: 14px; }
+.dh-title {
+    font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.05em; color: GrayText; margin-bottom: 6px;
+}
+.detail-history table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.detail-history th {
+    text-align: left; font-weight: 600; color: GrayText;
+    padding: 3px 8px;
+    border-bottom: 1px solid color-mix(in srgb, CanvasText 15%, Canvas);
+}
+.detail-history td {
+    padding: 3px 8px;
+    border-bottom: 1px solid color-mix(in srgb, CanvasText 7%, Canvas);
+}
 .detail-nav {
     position: absolute; top: 50%; transform: translateY(-50%);
     font-size: 26px; line-height: 1; padding: 6px 8px;
@@ -409,6 +471,10 @@ body.view-mode .card-menu-btn {
 body.view-mode .edit-only {
     display: none;
 }
+/* The inverse: view-mode-only content (e.g. the note detail's read-only
+   fields table — edit mode shows the same fields editable instead). */
+.view-only { display: none; }
+body.view-mode .view-only { display: block; }
 /* The root header only holds the edit-mode "+" button; collapse the otherwise
    empty bar in view mode so it leaves no reserved gap above the cards. */
 body.view-mode .root-header {
@@ -602,6 +668,8 @@ body.view-mode .root-header {
     transition: transform 0.2s ease, opacity 0.2s ease;
 }
 #selection-bar.open { transform: translate(-50%, 0); opacity: 1; pointer-events: auto; }
+/* Keep the last card row reachable while the bar floats over the grid. */
+body.selection-open { padding-bottom: 74px; }
 #selection-bar .flag-row { display: inline-flex; padding: 0 2px; }
 #selection-count { font-size: 12px; font-weight: 600; color: GrayText; white-space: nowrap; }
 .sel-btn {

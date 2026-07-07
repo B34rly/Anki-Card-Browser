@@ -72,10 +72,20 @@ class CardTray(QWidget, RenderMixin, RefreshMixin):
     # Emits sorted list of flag ints for the current deck
     flags_updated = pyqtSignal(list)
 
-    def __init__(self, title: str = "", parent=None, display_mode: str = "cards"):
+    # Emits a tag name when a card's tag pill is clicked (viewer sets the
+    # toolbar's tag filter — the combo lives on the Qt side)
+    tag_filter_requested = pyqtSignal(str)
+
+    def __init__(
+        self, title: str = "", parent=None, display_mode: str = "cards",
+        edit_target: str = "browser",
+    ):
         super().__init__(parent)
 
         self._builder = PageBuilder(display_mode)
+        # Where the Edit affordances go: Anki's Browser, or the inline field
+        # editor in the detail overlay (config `edit_target`).
+        self._edit_target = edit_target
         self._filters = FilterState()
         self._tracker = ChangeTracker()
         self._edit_mode: bool = False
@@ -194,6 +204,11 @@ class CardTray(QWidget, RenderMixin, RefreshMixin):
             # targeted paths re-push it so it can't go stale — and if its
             # unit was deleted, the failed push closes it.
             self._refresh_open_detail(col)
+            # Tags live on notes, flags on cards — keep the toolbar's filter
+            # dropdowns in step with whichever this op touched.
+            self._emit_filter_options(
+                col, bool(changes.note), bool(changes.card)
+            )
         except Exception:
             # Never leave a stale view (or break the hook chain) because a
             # targeted refresh hit an edge case — converge with a full render.
@@ -236,6 +251,23 @@ class CardTray(QWidget, RenderMixin, RefreshMixin):
         except Exception:
             pass
 
+    def set_all_collapsed(self, collapsed: bool) -> None:
+        """Collapse or expand every section of the current tree (persisted).
+
+        Only this tree's decks are touched — other trees keep their saved
+        collapse state.
+        """
+        col = mw.col
+        if col is None or self._tree_root is None:
+            return
+        tree = set(self._tree_deck_ids(col)) - {self._tree_root.deck_id}
+        if collapsed:
+            self._collapsed_decks |= tree
+        else:
+            self._collapsed_decks -= tree
+        self._save_collapsed(col)
+        self._render_deck_tree(emit_tags=False)
+
     # ── Bridge dispatch (pycmd messages from the page JS) ──
 
     def _on_bridge_cmd(self, cmd: str) -> None:
@@ -265,6 +297,9 @@ class CardTray(QWidget, RenderMixin, RefreshMixin):
 
     def _on_visible_section(self, col, payload: str) -> None:
         self.visible_section_changed.emit(int(payload))
+
+    def _on_filter_tag(self, col, payload: str) -> None:
+        self.tag_filter_requested.emit(payload)
 
     def _on_set_collapsed(self, col, payload: str) -> None:
         # Persisted so it survives reopen. The payload carries the explicit
@@ -321,10 +356,53 @@ class CardTray(QWidget, RenderMixin, RefreshMixin):
         open_add_cards(int(payload))
 
     def _on_edit_card(self, col, payload: str) -> None:
+        """Explicit ✎ buttons on card frames — obeys the edit_target config.
+
+        "inline" opens the unit's detail popup (whose fields are editable in
+        place) and drops focus into the first field; "browser" (and IO notes,
+        whose fields hold occlusion JSON) opens Anki's Browser. The popup's
+        own ✎ Edit button never comes through here — it just focuses the
+        fields client-side (focusDetailFields).
+        """
+        cid = int(payload)
+        if self._edit_target == "inline" and cid not in self._builder.io_groups:
+            self._on_card_detail(col, payload)
+            self._web.eval("focusDetailFields()")
+            return
+        self._web.eval("closeOverlay()")
         from aqt import dialogs
         browser = dialogs.open("Browser", mw)
         if browser:
             browser.search_for(f"cid:{payload}")
+
+    def _on_save_note(self, col, payload: str) -> None:
+        """Inline editor Save: JSON {nid, unit, fields} → update_note op.
+
+        The op pipeline refreshes the grid card; the success callback swaps
+        the overlay back to the read view and toasts.
+        """
+        from anki.notes import NoteId
+        try:
+            data = json.loads(payload)
+            note = col.get_note(NoteId(int(data["nid"])))
+            fields = [str(f) for f in data["fields"]]
+            unit = int(data["unit"])
+        except Exception:
+            return
+        if len(fields) != len(note.fields):
+            # The notetype changed under the open form; saving would scramble
+            # field assignments.
+            self.show_toast("Note layout changed. Not saved.")
+            return
+        note.fields = fields
+
+        def _back_to_view(_res) -> None:
+            self.show_toast("Saved")
+            self._on_card_detail(col, str(unit))
+
+        CollectionOp(self, lambda c: c.update_note(note)).success(
+            _back_to_view
+        ).run_in_background(initiator=self)
 
     def _on_add_subdeck(self, col, payload: str) -> None:
         deck = col.decks.get(DeckId(int(payload)))
@@ -493,6 +571,7 @@ class CardTray(QWidget, RenderMixin, RefreshMixin):
     _BRIDGE = {
         "scroll": _on_scroll,
         "visible_section": _on_visible_section,
+        "filter_tag": _on_filter_tag,
         "set_collapsed": _on_set_collapsed,
         "lazy_load": RenderMixin._on_lazy_load,
         "lazy_load_note_cards": RenderMixin._on_lazy_load_note_cards,
@@ -500,6 +579,7 @@ class CardTray(QWidget, RenderMixin, RefreshMixin):
         "card_detail": _on_card_detail,
         "note_detail": _on_note_detail,
         "detail_closed": _on_detail_closed,
+        "save_note": _on_save_note,
         "review_due_deck": _on_review_due_deck,
         "force_review_deck": _on_force_review_deck,
         "add_card": _on_add_card,

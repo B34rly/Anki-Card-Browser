@@ -23,9 +23,11 @@ from ..core.card_data import (
 from ..rendering import (
     build_detail_actions,
     build_detail_html,
+    build_editable_fields,
     build_io_container,
     build_note_fields_table,
     build_qa_content,
+    build_revlog_table,
 )
 from ..core.card_state import (
     card_countdown_from_meta,
@@ -92,8 +94,8 @@ def build_card_detail(col, cid: int) -> str:
 
     stats = [
         ("Due", _esc(_due_text(card, state, countdown, today))),
-        ("Interval", f"{card.ivl} days" if card.ivl else "—"),
-        ("Ease", f"{card.factor / 10:.0f}%" if card.factor else "—"),
+        ("Interval", f"{card.ivl} days" if card.ivl else "–"),
+        ("Ease", f"{card.factor / 10:.0f}%" if card.factor else "–"),
         ("Reviews", str(card.reps)),
         ("Lapses", str(card.lapses)),
         ("Created", _fmt_date(cid / 1000)),
@@ -108,9 +110,28 @@ def build_card_detail(col, cid: int) -> str:
         type_line=f"{nt_name} · {_template_name(nt, card.ord)}",
         state=state, countdown=countdown, flag=card.user_flag(),
         stats=stats, tags=note.tags,
-        content_html=build_qa_content(card.question(), card.answer()),
+        content_html=build_qa_content(
+            card.question(), card.answer(),
+            fields_html=build_editable_fields(
+                nid=note.id, unit_id=cid,
+                fields=get_note_fields(col, note.id),
+            ),
+        ),
         actions_html=actions,
+        history_html=build_revlog_table(_revlog_rows(col, cid)),
     )
+
+
+def _revlog_rows(col, cid: int, limit: int = 8) -> list[tuple]:
+    """The card's most recent reviews, newest first (empty on any db error)."""
+    try:
+        return col.db.all(
+            "select id, ease, ivl, type, time from revlog"
+            " where cid = ? order by id desc limit ?",
+            cid, limit,
+        )
+    except Exception:
+        return []
 
 
 def build_io_detail(col, group_cids: list[int]) -> str:
@@ -131,7 +152,7 @@ def build_io_detail(col, group_cids: list[int]) -> str:
     actions = build_detail_actions(
         cids_str, edit_cid=lead.id, suspended=summary["all_suspended"],
         buried=summary["all_buried"], can_reposition=False,
-        delete_label="Delete cards",
+        delete_label="Delete cards", inline_edit=False,
     )
     return build_detail_html(
         deck_path=col.decks.name(lead.did),
@@ -161,8 +182,12 @@ def build_note_detail(col, note_groups: dict[int, list[int]], lead_cid: int) -> 
         f'<option value="{cid}">{_esc(name)}</option>'
         for cid, name in get_card_template_names(col, note.id)
     )
+    # The fields ARE the note detail's content: directly editable in edit
+    # mode, a read-only table in view mode — never both at once.
+    note_fields = get_note_fields(col, note.id)
     content = (
-        f"{build_note_fields_table(get_note_fields(col, note.id))}"
+        f"{build_editable_fields(nid=note.id, unit_id=lead_cid, fields=note_fields)}"
+        f'<div class="view-only">{build_note_fields_table(note_fields)}</div>'
         f'<select class="overlay-card-select" onchange="onNoteCardSelect(this)">'
         f'<option value="">Preview a card…</option>{options}</select>'
         f'<div class="overlay-card-preview" id="overlay-card-preview"></div>'

@@ -297,4 +297,5 @@ def test_build_detail_html_includes_actions_and_content():
     )
     assert "question and answer" in html
     assert "Reposition" in html
-    assert "overlayNav" in html
+    # nav arrows live in the overlay shell (tray/render.py), not per-detail
+    assert "overlayNav" not in html

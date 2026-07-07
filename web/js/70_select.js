@@ -9,7 +9,10 @@ var _selected = new Set();
 var _selectAnchor = null;
 
 function _selId(el) {
-    return el.getAttribute('data-cid') || el.getAttribute('data-group-lead');
+    /* data-lazy last: a placeholder's key is its unit's lead cid, so
+       not-yet-loaded units participate in selection like loaded ones. */
+    return el.getAttribute('data-cid') || el.getAttribute('data-group-lead')
+        || el.getAttribute('data-lazy');
 }
 
 /* Called from expandCard/expandNoteGroup with the click event; returns true
@@ -59,6 +62,30 @@ function _selectRangeTo(el) {
     updateSelectionBar();
 }
 
+/* Ctrl/Cmd+A selects every rendered unit (which already respects the active
+   filters — filtered-out cards aren't in the DOM). */
+function selectAll() {
+    if (!_editMode) return;
+    _detailUnits().forEach(function(el) {
+        var id = _selId(el);
+        if (id && !_selected.has(id)) {
+            _selected.add(id);
+            el.classList.add('selected');
+        }
+    });
+    updateSelectionBar();
+}
+document.addEventListener('keydown', function(e) {
+    if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'a') return;
+    var t = document.activeElement;
+    if (t && (/^(input|textarea|select)$/i.test(t.tagName) || t.isContentEditable)) return;
+    var overlay = document.getElementById('overlay');
+    if (overlay && overlay.classList.contains('open')) return;
+    if (!_editMode) return;
+    e.preventDefault();
+    selectAll();
+});
+
 function clearSelection() {
     if (!_selected || _selected.size === 0) { updateSelectionBar(); return; }
     _selected.clear();
@@ -88,6 +115,8 @@ function updateSelectionBar() {
     if (!bar) return;
     var n = _selected ? _selected.size : 0;
     bar.classList.toggle('open', n > 0);
+    /* Reserve space below the grid so the bar can't cover the last row. */
+    document.body.classList.toggle('selection-open', n > 0);
     var count = document.getElementById('selection-count');
     if (count) count.textContent = n + ' selected';
 }

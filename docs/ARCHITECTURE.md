@@ -49,7 +49,8 @@ card-browser/
 │   └── webview.py              TrayWebView — drag-source gating
 ├── viewer/                 The outer widget + host modes
 │   ├── widget.py               CardBrowserWidget (layout, toolbar, filters, mode, auto-refresh)
-│   ├── filter_bar.py           Advanced filter panel + criteria/summary builders
+│   ├── filter_bar.py           Advanced filter panel + criteria builders + active-filter chips
+│   ├── searches.py             Saved searches (☆ menu) — named queries in the collection config
 │   ├── hosts.py                CardBrowserWindow / EmbeddedBrowser + open_card_browser()
 │   └── style.py                Qt stylesheet + toolbar SVG icons
 ├── web/                    CSS + JS for the webview
@@ -58,7 +59,7 @@ card-browser/
 ├── docs/
 │   ├── ARCHITECTURE.md      This file
 │   └── CONTRIBUTING.md      Code walkthrough for contributors
-└── tests/                  Three-level pytest suite (146 tests, see Testing below)
+└── tests/                  Three-level pytest suite (181 tests, see Testing below)
 ```
 
 ## Module Responsibilities
@@ -145,7 +146,17 @@ re-exports the full public surface so consumers just `from ..rendering import
 - `build_qa_content(question_html, answer_html)` — the Q/A side-toggle block.
 - `build_detail_actions(...)` — the overlay's horizontal action bar.
 - `build_detail_html(...)` — assembles header, actions, content and stats into the
-  full overlay body; renders the prev/next nav arrows.
+  full overlay body (the prev/next nav arrows live in the static overlay shell
+  built by `tray/render.py::_render_page`, not in this per-detail HTML).
+- `build_revlog_table(rows)` — the single-card detail's review-history table
+  (last 8 revlog rows, newest first).
+- `build_editable_fields(...)` — the detail's in-place field editor: a
+  `#detail-fields` section of contenteditable blocks, one per field. In a
+  card detail it is the Q/A toggle's third tab (`build_qa_content`'s
+  `fields_html`, edit mode only) so the rendered card and its raw fields
+  never show at once; in a note detail it is the content itself. Typing
+  marks it dirty (revealing the Revert/Save bar); Save/Revert wire to
+  `saveNoteEdit()`/`revertNoteEdit()`.
 
 ### `decks/` — deck tree queries, mutations, sidebar
 
@@ -187,12 +198,28 @@ snapshots in `sync.py`. State contract (owned here, used by both mixins):
   build and `eval` the overlay; `_refresh_open_detail` re-pushes it after an
   action changes its unit (closing it if the unit vanished);
   `_close_detail_if_deleted` closes it when its unit was just deleted.
+- **In-place field editing**: every card/note detail carries an editable
+  `#detail-fields` section (see *Detail Overlay*), so there is no separate
+  edit push. `_on_edit_card` (the explicit ✎ buttons on card frames) obeys
+  the `edit_target` config: `"inline"` opens the unit's detail and evals
+  `focusDetailFields()`; `"browser"` — and IO notes always (occlusion JSON
+  fields) — opens Anki's Browser. `_on_save_note` parses the
+  `save_note:<json>` payload, refuses (and toasts) if the field count no
+  longer matches the note's notetype, then runs `update_note` as a
+  `CollectionOp` whose success callback toasts "Saved" and re-pushes the
+  same detail with the saved content.
+- **`_on_filter_tag`**: relays a clicked tag pill's `filter_tag:<tag>` payload
+  to `tag_filter_requested`, which the viewer's toolbar uses to set the tag
+  filter combo.
+- **`set_all_collapsed(collapsed)`**: collapses or expands every section of
+  the current tree at once (persisted, like individual toggles); other trees'
+  saved state is untouched.
 - **Collapse persistence**: collapsed deck ids are stored in the collection config
   (`cardBrowser_collapsed_decks`), saved on every toggle and reloaded at the top
   of each render, so they survive restarts (independent of Anki's own
   `deck["collapsed"]`).
 - **Signals**: `visible_section_changed`, `subdeck_created`, `tags_updated`,
-  `flags_updated`.
+  `flags_updated`, `tag_filter_requested`.
 
 **`render.py`** — **`RenderMixin`**: full-page rendering and section/count updates.
 - **`set_deck_tree` / `_render_deck_tree`**: fetches whole-subtree card metadata
@@ -270,8 +297,11 @@ HTML; never touches the webview.
 
 **`details.py`** — `build_card_detail` / `build_io_detail` / `build_note_detail`:
 assemble collection data (stats, due-date text, template names, tags) into
-`rendering.detail`'s HTML builders. Pure builders — `CardTray` decides when to
-push them into the overlay.
+`rendering.detail`'s HTML builders; `build_card_detail` also attaches the
+single card's review-history table (last 8 revlog rows). Card and note
+details embed `build_editable_fields` (the in-place editor); the note
+detail's read-only fields table renders only for view mode (`view-only`).
+Pure builders — `CardTray` decides when to push them into the overlay.
 
 **`actions.py`** — card mutations behind the tray's menus, detail overlay, and
 drag-drop; nothing here touches the webview.
@@ -317,26 +347,41 @@ modes:
 - **Right panel**: a two-row filter toolbar, a collapsible advanced filter panel
   (built by `filter_bar.py`), and a `CardTray` webview.
 - Connected via a `QSplitter`.
-- Reads config (`display_mode`, `default_edit_mode`) on construction, normalising
-  unknown values to the documented defaults.
+- Reads config (`display_mode`, `default_edit_mode`, `edit_target`) on
+  construction, normalising unknown values to the documented defaults;
+  `edit_target` is passed straight through to `CardTray`.
 
 It wires signals between components: clicking a sidebar deck scrolls the tray;
 scrolling the tray highlights the sidebar; creating/deleting subdecks refreshes both.
 
-**Filter toolbar (Row 1):** content search (`QLineEdit`, 300 ms debounce) and state
-filter chips (`New` | `Learning` | `Due` | `Upcoming` | `Suspended`). A direct
-filter change (chip click, sort change, "Clear all filters") stops a pending
-debounce timer first, so a search-then-click can't render the page twice.
+**Filter toolbar (Row 1):** content search (`QLineEdit`, 300 ms debounce), a
+saved-searches button (☆, `viewer/searches.py`), and state filter chips
+(`New` | `Learning` | `Due` | `Upcoming` | `Suspended`). A direct filter change
+(chip click, sort change, "Clear all filters") stops a pending debounce timer
+first, so a search-then-click can't render the page twice. Clicking a tag pill
+on a card (`tagClicked` in JS → `filter_tag` bridge command →
+`tag_filter_requested` signal) sets the tag combo the same way.
 
-**Filter toolbar (Row 2):** "Filters" toggle (opens the advanced panel), an active-
-filter summary label, the sort dropdown (10 modes) and an asc/desc direction toggle.
+**Filter toolbar (Row 2):** "Filters" toggle (opens the advanced panel),
+collapse-all / expand-all buttons (⊟/⊞, call `tray.set_all_collapsed`), the
+active advanced filters as removable chips (`filter_bar.py::update_filter_chips`
+— each chip clears just its own filter; replaced the old summary label), the
+sort dropdown (10 modes) and an asc/desc direction toggle.
 
 **Auto-refresh** (see *Refresh Strategy* below).
 
 **`filter_bar.py`** — `FLAG_NAMES`; `build_filter_panel` (tag/flag combos plus
 min/max ranges for ease (%), interval (days), lapses and reviews, and a "Clear all
 filters" button); `build_criteria` (gathers spinbox values into the criteria dict
-— ease is entered as % but filtered in permille, hence ×10); `build_filter_summary`.
+— ease is entered as % but filtered in permille, hence ×10); `update_filter_chips`
+(rebuilds the removable-chip row from the active tag filter + criteria — each
+chip's click silently resets just its own control, then re-applies filters once).
+
+**`searches.py`** — Saved searches: named content-search queries persisted as a
+`{name: query}` dict in the collection config (`cardBrowser_saved_searches`,
+syncs with the profile). `open_saved_search_menu` builds the ☆ button's menu
+(apply / "Save current search…" / Remove submenu); `load_saved_searches`
+returns them name-sorted.
 
 **`hosts.py`**
 - **`CardBrowserWindow`** — singleton `QMainWindow` wrapping the widget; cleans up
@@ -444,7 +489,13 @@ The browser keeps itself in sync without full page reloads wherever possible.
        fall back to a full re-render;
     4. `_refresh_open_detail()` re-pushes the open detail overlay so it can't
        go stale from an action that changed its unit, closing it if the unit
-       vanished.
+       vanished — it leaves an open inline edit form (`_open_detail = ("edit",
+       cid)`) alone rather than clobbering unsaved DOM-only text;
+    5. `_emit_filter_options()` (`tray/render.py::RenderMixin`) re-fetches tags
+       and/or flags over the tree (whichever the op touched) and emits
+       `tags_updated` / `flags_updated`, so the toolbar's tag/flag dropdowns
+       pick up a tag or flag added via a menu/bulk action immediately, instead
+       of only on the next deck change.
     The whole handler is wrapped so any targeted-refresh edge case converges to a
     full (scroll-preserving) re-render instead of leaving a stale view.
 - **Sync** (`sync_did_finish`) → full refresh. Synced changes carry their original
@@ -477,6 +528,7 @@ actual top-level deck change resets to the top.
 |---|---|---|
 | `scroll` | `deck_id:depth` | Stores the section-anchored scroll position (`deck_id` 0 = raw offset) |
 | `visible_section` | deck_id | Emits signal → sidebar highlights deck |
+| `filter_tag` | tag | A clicked tag pill → emits `tag_filter_requested` → viewer sets the tag filter combo |
 | `set_collapsed` | `deck_id:0/1` | Records a section's explicit collapse state and persists it to the collection config |
 | `lazy_load` | cids | Renders cards/groups and injects via `fillCards()` |
 | `lazy_load_note_cards` | cids | Renders a note group's individual cards |
@@ -484,12 +536,13 @@ actual top-level deck change resets to the top.
 | `card_detail` | cid | Builds the detail overlay for a card / IO group (dispatches to the note-group detail instead when `cid` is a group lead); answers with `showCardDetail(html, id, isRefresh)` |
 | `note_detail` | lead cid | Builds the detail overlay for a note group (fields, card-preview select, stats) |
 | `detail_closed` | `1` | JS closed the overlay — stop pushing detail refreshes |
+| `save_note` | `<json {nid, unit, fields}>` | Inline editor Save: validates the field count against the note's current notetype, then runs `update_note` as an op; success toasts "Saved" and swaps back to the read view |
 | `move_cards` | `deck_id:cids` | Drag-and-drop: moves the unit(s) to the deck (group leads expand to their members; dragging a selected unit moves the whole selection) — see *Drag & Drop* |
 | `bulk` | `action:lead cids` | Multiselect bar: applies *action* to the selection (leads expand to group members) — see *Multiselect* |
 | `review_due_deck` | deck_id | Opens Anki's reviewer for that deck |
 | `force_review_deck` | deck_id | Confirms, sets all cards due today, starts review |
 | `add_card` | deck_id | Opens Anki's Add Cards dialog for that deck |
-| `edit_card` | cid | Opens Anki's Browser filtered to that card; stores it for refresh |
+| `edit_card` | cid | Explicit ✎ buttons on card frames. Obeys `edit_target`: `"browser"` (default) opens Anki's Browser filtered to that card; `"inline"` pushes the inline field editor into the overlay instead (IO notes always go to the Browser) |
 | `add_subdeck` / `add_sibling_subdeck` | deck_id | Prompts for a name, creates the subdeck |
 | `rename_deck` | deck_id | Prompts for a new name, renames the deck and its subdecks |
 | `delete_deck` | deck_id | Deletes an empty deck (after confirmation) |
@@ -560,9 +613,10 @@ Toggled by the eye/pencil button (defaults to **Edit**, set by `default_edit_mod
   the deck "+" buttons are hidden via CSS (`body.view-mode`); `cardAction`/
   `deleteCard` also early-return when not in edit mode. The otherwise-empty root
   header bar collapses. Multiselect and drag-drop are edit-mode-only gestures.
-- **Edit mode** (default): the edit pencil (opens Anki's editor), the full card/
-  group action menu (flag, tags, change deck, scheduling, delete…), the deck
-  "+" menus (add / rename / delete), multiselect and drag-drop are all exposed.
+- **Edit mode** (default): the edit pencil (Anki's Browser or the inline field
+  editor, per `edit_target`), the full card/group action menu (flag, tags,
+  change deck, scheduling, delete…), the deck "+" menus (add / rename /
+  delete), multiselect and drag-drop are all exposed.
 
 The mode flows `CardBrowserWidget._on_mode_toggled()` (`viewer/widget.py`) →
 `CardTray.edit_mode` (→ `setEditMode()` in JS, which also clears any active
@@ -577,7 +631,12 @@ answers with `showCardDetail(html, id, isRefresh)` — op-driven re-pushes carry
 `isRefresh=true`, and JS drops one whose id no longer matches the shown
 overlay, so a refresh racing the close animation can't reopen it. The overlay
 card is sized `min(920px, 92vw)` — noticeably larger than the inline card
-frames — so field tables and stats have room without wrapping awkwardly.
+frames — so field tables and stats have room without wrapping awkwardly. The
+overlay's chrome — the close button and the prev/next nav arrows — is static
+shell HTML written once by `tray/render.py::_render_page` (`#overlay-card` is
+a fixed, non-scrolling flex column; only `#overlay-card-content` inside it
+scrolls), not part of the per-detail HTML, so it can't be scrolled away or
+duplicated by a refresh.
 
 - **Header** — flag dot, deck path, state badge, notetype · template line, tags.
 - **Action bar** (edit mode only) — edit, flag swatches, suspend/bury, review
@@ -591,11 +650,35 @@ frames — so field tables and stats have room without wrapping awkwardly.
   masked image; note groups get the field table plus a per-card preview select.
 - **Stats grid** — due (date + countdown), interval, ease, reviews, lapses,
   created, modified (group details show card/state counts instead).
+- **Review history** — single-card details append a table of the card's last
+  8 revlog entries (when, kind, rating, interval, time taken), newest first
+  (`rendering/detail.py::build_revlog_table`); IO/note-group details omit it.
 - **Navigation** — edge arrows or ←/→ step through the rendered units in page
   order (`overlayNav`); the overlay content slides left or right in the travel
   direction (`showCardDetail` in `web/js/20_overlay.js`) instead of swapping
   instantly, so stepping through a deck reads as continuous motion rather than a
   jump-cut.
+
+**In-place field editing** — the detail view *is* the edit surface: every
+card/note detail embeds a `#detail-fields` section (`rendering/detail.py::
+build_editable_fields`, edit mode only) — in a card detail as the Fields
+tab of the Question/Answer toggle (one pane at a time, so render and raw
+fields never duplicate each other; for cloze/templated notetypes the two
+genuinely differ), in a note detail as the content itself. One
+contenteditable block per field, inside the same popup as the action bar,
+stats and history. Typing marks the section dirty: the Revert/Save bar
+appears, and refresh pushes back off (`showCardDetail` drops `isRefresh`
+pushes while dirty) so an op landing mid-edit can't wipe the DOM-only text.
+Save (`saveNoteEdit()`, or Ctrl+Enter) sends `save_note:<json>`; the success
+path re-pushes the same detail with the saved content. Revert re-requests
+the detail; Escape steps out of the field first, then closes. The overlay's
+✎ Edit button is pure client-side (`focusDetailFields()` — scrolls to and
+focuses the first field). The explicit ✎ pencils on card frames (`editCard`
+→ `edit_card` → `_on_edit_card`) obey the `edit_target` config: `"inline"`
+opens the detail popup pre-focused on the fields, `"browser"` (default)
+opens Anki's Browser. IO notes always go to the Browser — their fields hold
+occlusion JSON a free-form editor would corrupt (their detail's Edit button
+routes to `editCard` too).
 
 A full re-render resets the overlay; `detail_closed` from JS clears the state.
 
@@ -605,8 +688,12 @@ While in edit mode, Ctrl/Cmd-click toggles a card frame or note group into a
 selection instead of opening the detail overlay; Shift-click selects the
 contiguous range of rendered units from the last toggled one; once any unit is
 selected, **plain clicks also toggle membership** rather than opening the
-overlay, so the grid becomes select-first for the rest of the gesture. Selection
-ids are unit ids (`data-cid` or `data-group-lead`), tracked client-side in
+overlay, so the grid becomes select-first for the rest of the gesture. **Ctrl/
+Cmd+A** (`selectAll()`, `web/js/70_select.js`) selects every currently
+rendered unit — including not-yet-loaded lazy placeholders, since `_selId`
+falls back to a placeholder's `data-lazy` key — but is ignored while the
+overlay is open or a form control is focused. Selection ids are unit ids
+(`data-cid`, `data-group-lead`, or `data-lazy`), tracked client-side in
 `web/js/70_select.js`.
 
 A fixed bottom bar (`rendering.build_selection_bar()`, injected once per page by
@@ -614,7 +701,8 @@ A fixed bottom bar (`rendering.build_selection_bar()`, injected once per page by
 (0–7), suspend, unsuspend, bury, change-deck, add-tag, and delete, plus a close
 button. Every button calls `selectionAction()`, which sends
 `pycmd('bulk:<action>:<lead cids>')` — the selected units' own ids, not their
-expanded members.
+expanded members. While the bar is open, `body.selection-open` adds bottom
+padding to the page so the fixed bar can't cover the last grid row.
 
 `CardTray._on_bulk_action` (`tray/tray.py`) handles it:
 - expands each lead to its full IO/note-group membership
@@ -724,25 +812,32 @@ apps) are additionally refused by the page's own dragover/drop handlers
 Run from the add-on root: `python3 -m pytest tests/ -q` (needs the pip
 `anki`/`aqt`/`PyQt6` packages; everything runs headless on the offscreen Qt
 platform). The suite works at three levels, all against a **real temporary
-Anki collection** — no mocked data layer (146 tests total):
+Anki collection** — no mocked data layer (181 tests total):
 
 1. **Pure logic** (`test_card_state.py`, `test_card_data.py`,
    `test_note_grouping.py`, `test_card_rendering.py`) — state classification,
    filtering/sorting, SQL helpers, HTML builders.
-2. **Widget logic** (`test_tray_render.py`, `test_detail_overlay.py`) — a real
-   `CardTray` whose `AnkiWebView` is swapped for a `FakeWebView` that records
-   every `stdHtml`/`eval`, and `mw` swapped for a fake wrapping the real
-   collection. Covers renders, filters, bridge commands, and targeted
-   refreshes end-to-end on the Python side.
-3. **Live DOM** (`test_dom_lazy_load.py`, `test_drag_drop.py`,
-   `test_multiselect.py`, via `webview_harness.py`) — the exact page HTML loaded
-   into a real offscreen `QWebEngineView` with `pycmd` shimmed. Tests drive real
-   clicks/drags, round-trip bridge traffic through the tray, and can grab
-   screenshots. This level reproduces browser-only bugs (e.g. the lazy-load
-   bridge race). `test_drag_drop.py` and `test_multiselect.py` each combine a
-   few Python-side (mixin-level) cases with one or two of these DOM-driven ones,
-   since drag/select gestures need real DOM events but their refresh fallout is
-   easiest to assert from the Python side.
+2. **Widget logic** (`test_tray_render.py`, `test_detail_overlay.py`,
+   `test_inline_edit.py`, `test_op_pipeline.py`, `test_toast.py`,
+   `test_viewer_widget.py`) — a real `CardTray` (and, for `test_viewer_widget.py`,
+   a real `CardBrowserWidget`) whose `AnkiWebView` is swapped for a `FakeWebView`
+   that records every `stdHtml`/`eval`, and `mw` swapped for a fake wrapping the
+   real collection. Covers renders, filters, bridge commands, the inline editor,
+   the op-driven refresh pipeline, toasts, and targeted refreshes end-to-end on
+   the Python side.
+3. **Live DOM** (`test_dom_lazy_load.py`, `test_dom_state_sync.py`,
+   `test_drag_drop.py`, `test_multiselect.py`, via `webview_harness.py`) — the
+   exact page HTML loaded into a real offscreen `QWebEngineView` with `pycmd`
+   shimmed. Tests drive real clicks/drags, round-trip bridge traffic through
+   the tray, and can grab screenshots. This level reproduces browser-only bugs
+   (e.g. the lazy-load bridge race). `test_drag_drop.py` and `test_multiselect.py`
+   each combine a few Python-side (mixin-level) cases with one or two of these
+   DOM-driven ones, since drag/select gestures need real DOM events but their
+   refresh fallout is easiest to assert from the Python side.
+
+CI (`.github/workflows/ci.yml`) runs the full suite plus `pyflakes` and
+`node --check` on every `web/js/*.js` file, on push/PR and monthly against the
+latest `anki`/`aqt` release (to catch upstream API breaks early).
 
 Host integration (embedded mode, Anki hooks, profile switches) still needs the
 manual smoke tests in HANDOFF.md / live Anki.

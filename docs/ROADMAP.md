@@ -11,13 +11,15 @@ UX, UI, code risks, and structural improvements. Effort tags: [S]mall (≤½ day
 
 ### Browse-parity gaps (owner directive: close, but not 100% of editing)
 
-- **Inline field editing in the detail overlay** [M] — the single biggest gap.
+- **Inline field editing in the detail overlay** [DONE 2026-07-07] — behind
+  `edit_target: "browser" | "inline"` per the owner directive (pencil + detail
+  Edit obey it; IO notes always use the Browser). Was the single biggest gap.
   "Edit" currently bounces to Anki's Browser, which is exactly the context
   switch this add-on exists to avoid. Contenteditable fields (or plain
   textareas) in the detail overlay + `col.update_note` via the existing
   refresh pipeline would cover ~90 % of real edits. Images/LaTeX stay in
   Anki's editor.
-- **Saved searches** [S] — persist named queries (collection config, like the
+- **Saved searches** [DONE 2026-07-07] — persist named queries (collection config, like the
   collapse set); a star button next to the search box + a dropdown of saved
   ones. The search plumbing already exists.
 - **Column/table view** [L] — a compact list mode for triage (sortable columns:
@@ -27,14 +29,14 @@ UX, UI, code risks, and structural improvements. Effort tags: [S]mall (≤½ day
   Browse for daily use".
 - **Find & Replace across selection** [M] — with multiselect done this is the
   natural next bulk action (`col.find_and_replace`), and Anki's Browse has it.
-- **Review history in the detail overlay** [S] — Anki's Card Info shows the
+- **Review history in the detail overlay** [DONE 2026-07-07] — Anki's Card Info shows the
   revlog; we already have the stats grid. One `revlog` query + a small table
   ("when · rating · interval · ease · time taken"). High value for the "cards
   as objects you inspect" story.
 - **Notetype filter** [S] — a dropdown next to the tag filter (the metadata
   fetch already carries `mid`).
-- **Select all** [S] — Ctrl+A selects all rendered units in view (respects
-  filters); "N selected" already generalises.
+- **Select all** [DONE 2026-07-07] — Ctrl+A selects all rendered units in view
+  (respects filters); placeholders participate in selection too.
 - **Drag onto the sidebar** [M] — the HTML5 drag is a native Qt drag carrying
   `text/plain` cids, so `DeckTree` can accept drops directly
   (`dragEnterEvent`/`dropEvent` on the QTreeWidget → the existing
@@ -65,19 +67,18 @@ UX, UI, code risks, and structural improvements. Effort tags: [S]mall (≤½ day
   undo. Best delivered via the CollectionOp migration (§5) so labels are right.
 - **Empty & loading states** [S] — empty decks show a friendly "No cards —
   add one" CTA; placeholders get a shimmer instead of a static badge.
-- **Active filters as removable chips** [S] — replace the text summary in
+- **Active filters as removable chips** [DONE 2026-07-07] — replace the text summary in
   row 2 with chips (`Tag: baking ✕`, `Ease ≤ 200 % ✕`); one click removes one
   filter. Much clearer than the current summary string + buried panel.
 - **Search result count near the box** [S] — "17 matches" inline; the title
   carries it today but it's at the other end of the screen.
-- **Collapse/expand all** [S] — one button in the toolbar.
-- **Bottom padding when the selection bar is open** [S] — the bar currently
-  overlaps the last card row.
+- **Collapse/expand all** [DONE 2026-07-07] — toolbar buttons, persisted per tree.
+- **Bottom padding when the selection bar is open** [DONE 2026-07-07].
 - **Persist last deck + scroll across restarts** [S] — save to collection
   config on teardown; restore on open. The section-anchor scroll format
   already survives re-renders, so it serialises cleanly.
-- **Clickable tags** [S] — tag pills (cards + detail overlay) set the tag
-  filter on click.
+- **Clickable tags** [DONE 2026-07-07] — tag pills (cards + detail overlay) set
+  the tag filter on click.
 - **Config dialog** [M] — display mode, default edit mode, density, eager
   limit; today they're raw JSON (`config.md`). Anki's addon-config hook is
   enough (`mw.addonManager.setConfigAction`).
@@ -85,7 +86,7 @@ UX, UI, code risks, and structural improvements. Effort tags: [S]mall (≤½ day
 
 ## 3 · UI improvements
 
-- **Pin the overlay chrome** [S] — nav arrows and the close button scroll away
+- **Pin the overlay chrome** [DONE 2026-07-07] — nav arrows and the close button scrolled away
   with long content because `#overlay-card` is the scroll container.
   Restructure to header + scrollable body + fixed arrows.
 - **Normalise card content typography** [S] — note templates bring arbitrary
@@ -109,7 +110,7 @@ UX, UI, code risks, and structural improvements. Effort tags: [S]mall (≤½ day
 (From a dedicated audit pass; see also the accepted-issues list in
 HANDOFF.md.)
 
-- **Tag/flag dropdowns go stale after our own edits** [S fix] — `emit_tags`
+- **Tag/flag dropdowns go stale after our own edits** [FIXED 2026-07-07] — `emit_tags`
   fires only on deck change, so adding a tag via the menu/bulk bar doesn't
   appear in the filter dropdown until the deck is switched. Fix: re-emit after
   tag mutations.
@@ -213,7 +214,8 @@ fixes and should ship as one "state-sync batch" before new features.
   flows through one pipeline, (3) remove a whole class of "forgot to refresh
   after new action X" bugs. Do it action-by-action behind the existing
   bridge handlers; the tests pin behaviour.
-- **CI** [S] — GitHub Actions: `pytest tests/ -q` (offscreen works headless),
+- **CI** [DONE 2026-07-07, unverified on GitHub] — .github/workflows/ci.yml:
+  `pytest tests/ -q` (offscreen works headless),
   `pyflakes`/`ruff`, `node --check web/js/*.js`. The suite is already
   CI-shaped (hard-exit handles the WebEngine teardown).
 - **Release packaging** [S] — a `make dist` that zips into `.ankiaddon`
@@ -229,10 +231,11 @@ fixes and should ship as one "state-sync batch" before new features.
    they were exactly the "weird reloading" class. Findings 3-5 fell out of
    the CollectionOp migration; 1/2/6/7/8/9 shipped as one batch with
    regression tests at every level.
-2. **Quick wins batch** [~1 session]: toasts, tag-dropdown staleness fix,
+2. **Quick wins batch** [DONE 2026-07-07]: toasts, tag-dropdown staleness fix,
    selection-bar padding, collapse/expand all, filter chips, revlog in
-   detail, select-all, saved searches, overlay chrome pinning.
-3. **Inline field editing** — the flagship feature.
+   detail, select-all, saved searches, overlay chrome pinning, clickable
+   tags, CI workflow.
+3. **Inline field editing** [DONE 2026-07-07] — the flagship, behind edit_target.
 4. **CollectionOp migration** — pays down the dual-pipeline risk before more
    mutating features pile on (and would have prevented findings 3–5 above
    by construction).

@@ -73,10 +73,17 @@ def frame_classes(state: str, suspended: bool, buried: bool = False, *extra: str
 
 
 def build_tag_strip(tags: list[str]) -> str:
-    """Build an inline scrollable tag strip for the card top bar."""
+    """Build an inline scrollable tag strip for the card top bar.
+
+    Pills are clickable: they set the toolbar's tag filter (tagClicked).
+    """
     if not tags:
         return ""
-    pills = " ".join(f'<span class="card-tag">{_esc(t)}</span>' for t in tags)
+    pills = " ".join(
+        f'<span class="card-tag" data-tag="{_esc(t)}" '
+        f'onclick="tagClicked(event,this)" title="Filter by this tag">{_esc(t)}</span>'
+        for t in tags
+    )
     return f'<div class="card-tag-strip">{pills}</div>'
 
 

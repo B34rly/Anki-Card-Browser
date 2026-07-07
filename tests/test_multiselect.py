@@ -77,6 +77,51 @@ def test_bulk_expands_note_group_leads(tray, fake_mw):
         assert col.get_card(cid).queue == QUEUE_SUSPENDED
 
 
+def test_dom_select_all_and_body_padding_class(qapp, tray, fake_mw):
+    """Ctrl+A selects every rendered unit and the body gets the padding
+    class so the bar can't cover the last row."""
+    tray.set_filters(search_text="a")  # matches every sample card
+    page = DomPage(tray._web.page_html, connected=True)
+    try:
+        page.wait_loaded()
+        page.run_js("setEditMode(true); true")
+        page.run_js(
+            "document.dispatchEvent(new KeyboardEvent('keydown',"
+            " {key: 'a', ctrlKey: true, bubbles: true, cancelable: true})); true"
+        )
+        units = page.run_js("_detailUnits().length")
+        assert units > 0
+        assert page.run_js("_selected.size") == units
+        assert page.run_js("document.body.classList.contains('selection-open')")
+        page.run_js("clearSelection(); true")
+        assert not page.run_js("document.body.classList.contains('selection-open')")
+    finally:
+        page.close()
+
+
+def test_dom_tag_pill_click_requests_filter(qapp, tray, fake_mw):
+    """Clicking a tag pill sends filter_tag (and doesn't open the card)."""
+    cids = fake_mw.col._test_cids
+    tray.set_filters(search_text="banana")  # banana has tag "baking"
+    page = DomPage(tray._web.page_html, connected=True)
+    try:
+        page.wait_loaded()
+        page.drain_pycmds()
+        assert page.run_js(
+            f"document.querySelector('[data-cid=\"{cids['banana']}\"]"
+            " .card-tag') !== null"
+        )
+        page.run_js(
+            f"document.querySelector('[data-cid=\"{cids['banana']}\"]"
+            " .card-tag').click(); true"
+        )
+        cmds = page.drain_pycmds()
+        assert "filter_tag:baking" in cmds
+        assert not any(c.startswith("card_detail:") for c in cmds)
+    finally:
+        page.close()
+
+
 def test_dom_ctrl_click_selects_and_bulk_sends(qapp, tray, fake_mw):
     """Real DOM: Ctrl-click selects two cards, the bar opens, Suspend sends
     one bulk command, Escape clears."""

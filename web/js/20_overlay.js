@@ -43,8 +43,10 @@ function showCardDetail(html, id, isRefresh) {
        the open detail): accepting it would reopen an overlay Python already
        believes is closed — never refreshed, never closable from its side.
        Only pushes for the unit currently shown may refresh; user-initiated
-       opens (isRefresh falsy) always win. */
-    if (isRefresh && id !== _overlayId) return;
+       opens (isRefresh falsy) always win. Refreshes also back off while the
+       detail's fields hold unsaved edits (DOM-only text a swap would wipe;
+       our own save re-pushes with isRefresh=false, so it still lands). */
+    if (isRefresh && (id !== _overlayId || _fieldsDirty())) return;
     _overlayId = id;
     var overlay = document.getElementById('overlay');
     var inner = document.getElementById('overlay-card-content');
@@ -72,16 +74,21 @@ function showCardDetail(html, id, isRefresh) {
     inner.innerHTML = html;
     _openOverlay();
 }
-function detailShowSide(e, side) {
-    e.stopPropagation();
+/* Sides: 'q'/'a' (rendered card) and 'f' (the editable raw fields) — one
+   pane at a time, so the render and its source never repeat each other. */
+function _showDetailSide(side) {
     var c = document.getElementById('detail-content');
     if (!c) return;
-    c.classList.toggle('show-q', side === 'q');
-    c.classList.toggle('show-a', side === 'a');
-    document.querySelectorAll('.ds-toggle').forEach(function(b) {
-        b.classList.remove('active');
+    ['q', 'a', 'f'].forEach(function(s) {
+        c.classList.toggle('show-' + s, s === side);
     });
-    e.currentTarget.classList.add('active');
+    document.querySelectorAll('.ds-toggle').forEach(function(b) {
+        b.classList.toggle('active', b.getAttribute('data-side') === side);
+    });
+}
+function detailShowSide(e, side) {
+    e.stopPropagation();
+    _showDetailSide(side);
 }
 /* Detail-overlay actions reuse cardAction; Python re-pushes the open detail
    after applying the action, so the overlay refreshes itself. */
@@ -161,6 +168,56 @@ function toggleNoteCards(e, gk) {
         }
     }
 }
+/* ── In-place field editing (part of the detail view itself) ──
+   Every card/note detail carries a #detail-fields section: contenteditable
+   blocks inside the same popup as the stats/actions/history. Typing marks
+   it dirty, which reveals the Revert/Save bar and makes refresh pushes
+   back off (see showCardDetail) so an op landing mid-edit can't wipe the
+   text. Save round-trips through save_note; Revert re-requests this same
+   detail. Unsaved text is deliberately DOM-only. */
+function _detailFields() {
+    return document.getElementById('detail-fields');
+}
+function _fieldsDirty() {
+    var f = _detailFields();
+    return !!(f && f.classList.contains('dirty'));
+}
+document.addEventListener('input', function(e) {
+    var f = e.target && e.target.closest ? e.target.closest('#detail-fields') : null;
+    if (f) f.classList.add('dirty');
+});
+function saveNoteEdit() {
+    var f = _detailFields();
+    if (!f || !_fieldsDirty() || typeof pycmd !== 'function') return;
+    var fields = [];
+    f.querySelectorAll('.edit-field').forEach(function(el) {
+        fields.push(el.innerHTML);
+    });
+    pycmd('save_note:' + JSON.stringify({
+        nid: f.getAttribute('data-nid'),
+        unit: f.getAttribute('data-unit'),
+        fields: fields,
+    }));
+}
+function revertNoteEdit() {
+    var f = _detailFields();
+    if (!f || typeof pycmd !== 'function') return;
+    pycmd('card_detail:' + f.getAttribute('data-unit'));
+}
+function focusDetailFields(e) {
+    if (e) e.stopPropagation();
+    var f = _detailFields();
+    if (!f) return;
+    /* In a card detail the fields live in the toggle's Fields pane — bring
+       that to front first (a hidden field can't take focus). */
+    var content = document.getElementById('detail-content');
+    if (content && content.contains(f)) _showDetailSide('f');
+    var first = f.querySelector('.edit-field');
+    if (!first) return;
+    first.scrollIntoView({block: 'nearest'});
+    first.focus();
+}
+
 function closeOverlay() {
     const overlay = document.getElementById('overlay');
     overlay.classList.remove('visible');
@@ -178,21 +235,33 @@ function closeOverlay() {
     }, 280);
 }
 document.addEventListener('keydown', function(e) {
+    var overlay = document.getElementById('overlay');
+    var overlayOpen = overlay && overlay.classList.contains('open');
     if (e.key === 'Escape') {
-        var ov = document.getElementById('overlay');
-        if (ov && ov.classList.contains('open')) closeOverlay();
-        else clearSelection();
+        var focused = document.activeElement;
+        if (overlayOpen && focused && focused.classList
+                && focused.classList.contains('edit-field')) {
+            focused.blur();  /* step out of the field; second Esc closes */
+        } else if (overlayOpen) {
+            closeOverlay();
+        } else {
+            clearSelection();
+        }
         return;
     }
-    var overlay = document.getElementById('overlay');
-    if (overlay && overlay.classList.contains('open')) {
-        /* Don't steal arrows from a focused form control (e.g. the note
-           detail's card-preview select uses them to change options). */
-        var focused = document.activeElement;
-        if (focused && /^(select|input|textarea)$/i.test(focused.tagName)) return;
-        if (e.key === 'ArrowLeft') overlayNav(-1);
-        else if (e.key === 'ArrowRight') overlayNav(1);
+    if (!overlayOpen) return;
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && _fieldsDirty()) {
+        e.preventDefault();
+        saveNoteEdit();
+        return;
     }
+    /* Don't steal arrows from a focused form control (the card-preview
+       select uses them for options; the editor's fields for the caret). */
+    var focused = document.activeElement;
+    if (focused && (/^(select|input|textarea)$/i.test(focused.tagName)
+        || focused.isContentEditable)) return;
+    if (e.key === 'ArrowLeft') overlayNav(-1);
+    else if (e.key === 'ArrowRight') overlayNav(1);
 });
 
 function deckAction(e, action, deckId) {

@@ -1,0 +1,35 @@
+# Runs the full suite (pure logic + Qt-offscreen + real-DOM WebEngine tests)
+# on every push/PR, plus monthly against the latest anki/aqt release to catch
+# upstream API breaks early (see ROADMAP §5).
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 1 * *"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install WebEngine system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libnss3 libxkbcommon-x11-0 libxcomposite1 \
+            libxdamage1 libxrandr2 libxtst6 libxss1 libasound2t64 libgbm1
+      - name: Install Python dependencies
+        run: pip install anki aqt[qt6] pytest pyflakes
+      - name: Lint
+        run: |
+          python -m pyflakes .
+          for f in web/js/*.js; do node --check "$f"; done
+      - name: Tests
+        run: python -m pytest tests/ -q

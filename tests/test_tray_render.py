@@ -127,6 +127,46 @@ def test_suspend_action_updates_card(tray, fake_mw):
     assert tray._web.evals_matching("replaceCard(")
 
 
+def test_set_all_collapsed_persists_and_rerenders(tray, fake_mw):
+    col = fake_mw.col
+    alpha = col.decks.id_for_name("Parent::Alpha")
+    beta = col.decks.id_for_name("Parent::Beta")
+
+    pages_before = len(tray._web.pages)
+    tray.set_all_collapsed(True)
+    saved = set(col.get_config("cardBrowser_collapsed_decks", []))
+    assert {alpha, beta} <= saved
+    assert len(tray._web.pages) == pages_before + 1
+
+    tray.set_all_collapsed(False)
+    saved = set(col.get_config("cardBrowser_collapsed_decks", []))
+    assert not ({alpha, beta} & saved)
+
+
+def test_tag_mutation_refreshes_dropdown_options(tray, fake_mw, monkeypatch):
+    """Regression: tags were emitted only on deck change, so a tag added via
+    the menu never appeared in the filter dropdown until deck switch."""
+    col = fake_mw.col
+    cids = col._test_cids
+    emitted: list[list] = []
+    tray.tags_updated.connect(emitted.append)
+    monkeypatch.setattr(
+        addon_module("tray.actions").QInputDialog, "getText",
+        staticmethod(lambda *a, **k: ("freshtag", True)),
+    )
+
+    tray._on_bridge_cmd(f"add_tag:{cids['apple']}")
+
+    assert emitted and "freshtag" in emitted[-1]
+
+
+def test_filter_tag_bridge_emits_signal(tray, fake_mw):
+    got: list[str] = []
+    tray.tag_filter_requested.connect(got.append)
+    tray._on_bridge_cmd("filter_tag:baking")
+    assert got == ["baking"]
+
+
 def test_collapse_state_persists(tray, fake_mw):
     alpha_did = fake_mw.col.decks.id_for_name("Parent::Alpha")
     tray._on_bridge_cmd(f"set_collapsed:{alpha_did}:1")

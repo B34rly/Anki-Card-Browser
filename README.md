@@ -13,9 +13,13 @@ A visual card browser add-on for Anki that lets you see all your cards at a glan
 - **Filter, search & sort** — Live content search, state filter chips (New / Learning / Due / Upcoming / Suspended), an advanced panel (tag, flag, ease / interval / lapse / review ranges), and 10 sort modes.
 - **Card state indicators** — Each card shows a coloured state badge and countdown; deck headers show live `N / L / U / D` counts.
 - **View / Edit mode** — Toggle between a clean read-only view and an edit mode that exposes card and deck actions. Opens in Edit mode by default (configurable).
-- **Card actions** (edit mode) — A per-card/group 3-dot menu with flag (1–7 + clear), add / remove tag, change deck, set due date, suspend / unsuspend, bury / unbury, forget, reposition, review now, and delete. The pencil opens Anki's editor and refreshes the card in place on save. The action menu and pencil appear only in edit mode — view mode is read-only. Flagged cards show a coloured dot; buried cards are dimmed.
-- **Deck actions** (edit mode) — Review due cards, force-review all (with confirmation), add cards, add child / sibling subdecks, rename decks, and delete empty decks. Available from both the sidebar right-click menu and each deck header's **+** menu.
-- **Expand & preview** — Click any card to see it full-size in a centred overlay (Escape closes). Note groups offer a per-card template preview dropdown.
+- **Card inspector** — Click any card for a full detail overlay: Q/A toggle, action bar, stats grid, review history, and ←/→ navigation between cards. Escape closes; chrome stays pinned while long content scrolls.
+- **Inline editing** — Edit note fields right in the inspector (✎ Edit): every field is directly editable, Ctrl+Enter saves through Anki's undo system, and the grid refreshes in place. The `edit_target` config decides whether the card-frame pencils also edit inline or open Anki's Browser.
+- **Card actions** (edit mode) — A per-card/group 3-dot menu with flag (1–7 + clear), add / remove tag, change deck, set due date, suspend / unsuspend, bury / unbury, forget, reposition, review now, and delete. Every action shows an in-page toast and is undoable with Ctrl+Z. Flagged cards show a coloured dot; buried cards are dimmed.
+- **Multiselect & bulk actions** — Ctrl/Cmd-click (or Ctrl+A for all, Shift-click for ranges) selects cards; a bottom bar applies flags, suspend, bury, change deck, tags, or delete to the whole selection.
+- **Drag & drop** — Drag cards (or whole selections and note groups) onto any deck header to move them — the card slides into its new section with no page flash.
+- **Deck actions** (edit mode) — Review due cards, force-review all (with confirmation), add cards, add child / sibling subdecks, rename decks, and delete empty decks. Available from both the sidebar right-click menu and each deck header's **+** menu. Collapse/expand-all buttons in the toolbar.
+- **Saved searches & filter chips** — Star a query to save it by name; active advanced filters show as removable chips. Tag pills on cards are click-to-filter.
 - **Embedded or windowed** — Open inline in Anki's main window (default) or as a separate floating window (`mode` config).
 - **Light & dark mode** — Fully palette-aware styling for both the Qt widgets and the web view.
 
@@ -45,23 +49,20 @@ Open **Tools → Add-ons → Card Browser → Config**. See [`config.md`](config
 | `mode` | `"embedded"` | `"embedded"` (inline in the main window) or `"window"` (separate floating window). Restart to apply. |
 | `display_mode` | `"cards"` | `"cards"` (each card) or `"notes"` (group cards by note). Restart to apply. |
 | `default_edit_mode` | `true` | Open in Edit mode (`true`) or View mode (`false`). Restart to apply. |
+| `edit_target` | `"browser"` | Where the card-frame ✎ pencils go: `"browser"` (Anki's Browser) or `"inline"` (the overlay's field editor). The inspector's own Edit button is always inline. Restart to apply. |
 
 ## File Overview
 
-| File | Purpose |
+| Path | Purpose |
 |------|---------|
 | `__init__.py` | Registers the **Cards** toolbar button and a collection-load cache reset |
-| `viewer.py` | `CardBrowserWidget` (layout, toolbar, filters, mode toggle, auto-refresh) plus the window/embedded host classes |
-| `deck_tree.py` | `QTreeWidget`-based sidebar for navigating subdecks |
-| `decks.py` | Helpers for querying the deck tree from Anki's collection |
-| `deck_ops.py` | Deck add/rename/delete dialogs shared by the sidebar and tray menus |
-| `card_tray.py` | `AnkiWebView` that renders the card grid, bridge dispatch, lazy loading, and targeted refresh |
-| `card_data.py` | Bulk SQL metadata fetch, content/tag search, IO notetype detection and HTML parsing |
-| `card_state.py` | Card state classification, countdown formatting, filtering, sorting, theme colours |
-| `card_rendering.py` | HTML builders for card frames, IO overlays, note groups, deck-path labels |
-| `note_grouping.py` | Note-level grouping and state summaries for notes display mode |
-| `tray_styles.py` | CSS for the web view (string constant) |
-| `tray_js.py` | JavaScript for the web view (string constant) |
+| `core/` | Collection data + domain logic (metadata SQL, card states, note grouping) — no Qt, no HTML |
+| `rendering/` | Pure HTML builders (card frames, IO overlays, note groups, detail overlay, inline editor) |
+| `decks/` | Deck tree data, deck mutations, and the sidebar widget |
+| `tray/` | The card tray: webview, Python↔JS bridge, rendering/refresh pipeline, actions, filters |
+| `viewer/` | The outer widget: toolbar, filter bar, saved searches, window/embedded hosts |
+| `web/` | `tray.css` + numbered `js/` chunks concatenated into the page script |
+| `tests/` | Three-level pytest suite (pure logic → fake-webview widget → real-DOM WebEngine) |
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for a deeper tour and [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) for a contributor walkthrough.
 

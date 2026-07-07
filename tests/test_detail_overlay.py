@@ -10,6 +10,9 @@ def _detail_evals(tray):
 
 def test_card_detail_contents(tray, fake_mw):
     cids = fake_mw.col._test_cids
+    # the nav arrows are part of the page shell, pinned outside the
+    # scrolling detail content
+    assert "overlayNav" in tray._web.page_html
     tray._web.reset_log()
     tray._on_bridge_cmd(f"card_detail:{cids['banana']}")
 
@@ -19,11 +22,33 @@ def test_card_detail_contents(tray, fake_mw):
     # stats, content, actions and chrome all present
     for expected in (
         "banana bread", "Due", "Interval", "Ease", "Reviews", "Lapses",
-        "Created", "Modified", "detail-actions", "overlayNav",
+        "Created", "Modified", "detail-actions",
         "Suspend", "Delete card", "Basic",
     ):
         assert expected in html, f"missing {expected!r}"
     assert tray._open_detail == ("card", cids["banana"])
+
+
+def test_card_detail_includes_review_history(tray, fake_mw):
+    """Cards with actual reviews get a revlog table in the detail."""
+    col = fake_mw.col
+    cids = col._test_cids
+    col.db.execute(
+        "insert into revlog (id, cid, usn, ease, ivl, lastIvl, factor,"
+        " time, type) values (?, ?, -1, 3, 10, 5, 2500, 6300, 1)",
+        1720000000000, cids["banana"],
+    )
+    tray._web.reset_log()
+    tray._on_bridge_cmd(f"card_detail:{cids['banana']}")
+    html = _detail_evals(tray)[0]
+    assert "Review history" in html
+    assert "Good" in html   # ease 3
+    assert "10d" in html    # new interval
+    assert "6.3s" in html   # time taken
+    # cards with no reviews show no history section
+    tray._web.reset_log()
+    tray._on_bridge_cmd(f"card_detail:{cids['apple']}")
+    assert "Review history" not in _detail_evals(tray)[0]
 
 
 def test_card_action_refreshes_open_detail(tray, fake_mw):

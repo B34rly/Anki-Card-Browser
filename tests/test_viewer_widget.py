@@ -44,6 +44,43 @@ def test_filter_change_consumes_pending_search_debounce(widget, fake_mw):
     assert len(widget.tray._web.pages) == pages_before + 1
 
 
+def test_tag_pill_request_sets_combo_and_filters(widget, fake_mw):
+    """A tag pill click in the page routes to the Qt combo and applies."""
+    widget.tray.tag_filter_requested.emit("baking")
+    assert widget._tag_combo.currentData() == "baking"
+    assert widget.tray._filters.tag_filter == "baking"
+
+
+def test_filter_chips_show_and_clear(widget, fake_mw):
+    idx = widget._tag_combo.findData("baking")
+    assert idx > 0, "sample tag should be in the dropdown"
+    widget._tag_combo.setCurrentIndex(idx)  # → _apply_filters → chips
+
+    layout = widget._active_chips_layout
+    labels = [layout.itemAt(i).widget().text() for i in range(layout.count())]
+    assert any(text.startswith("Tag: baking") for text in labels)
+
+    layout.itemAt(0).widget().click()  # ✕ chip clears exactly that filter
+    assert widget._tag_combo.currentData() == ""
+    assert layout.count() == 0
+    assert widget.tray._filters.tag_filter == ""
+
+
+def test_saved_searches_roundtrip(widget, fake_mw, monkeypatch):
+    searches = addon_module("viewer.searches")
+    col = fake_mw.col
+    monkeypatch.setattr(
+        searches.QInputDialog, "getText",
+        staticmethod(lambda *a, **k: ("Baking cards", True)),
+    )
+    widget._card_search.setText("tag:baking")
+    searches._save_current(widget, col)
+    assert searches.load_saved_searches(col) == {"Baking cards": "tag:baking"}
+
+    searches._remove(col, "Baking cards")
+    assert searches.load_saved_searches(col) == {}
+
+
 def test_external_change_handler_survives_filters(widget, fake_mw):
     """The op pipeline's bulk-change branch (filters active, >1 note) must
     converge without touching removed attributes (regression)."""

@@ -137,10 +137,18 @@ QPushButton#clearFilters:hover {
     border-color: palette(dark);
     background: palette(midlight);
 }
-QLabel#filterSummary {
-    font-size: 11px;
+QPushButton#activeChip {
+    padding: 2px 8px;
+    border: 1px solid palette(highlight);
+    border-radius: 10px;
+    background: palette(base);
     color: palette(highlight);
-    padding: 0 4px;
+    font-size: 11px;
+    min-height: 18px;
+}
+QPushButton#activeChip:hover {
+    background: palette(highlight);
+    color: palette(highlighted-text);
 }
 """
 

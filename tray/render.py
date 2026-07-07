@@ -138,6 +138,8 @@ class RenderMixin:
             f'<div id="overlay" onclick="closeOverlay()">'
             f'  <div id="overlay-card" onclick="event.stopPropagation()">'
             f'    <button id="overlay-close" onclick="closeOverlay()">&times;</button>'
+            f'    <button class="detail-nav detail-nav-prev" onclick="overlayNav(-1)" title="Previous card">&#8249;</button>'
+            f'    <button class="detail-nav detail-nav-next" onclick="overlayNav(1)" title="Next card">&#8250;</button>'
             f'    <div id="overlay-card-content"></div>'
             f'  </div>'
             f'</div>'
@@ -215,6 +217,21 @@ class RenderMixin:
         for d, cids in cid_lists.items():
             sc = self._builder.state_counts_html(col, cids, meta, today)
             self._web.eval(f"updateHeaderCounts({d}, {json.dumps(sc)})")
+
+    def _emit_filter_options(self, col, notes_changed: bool, cards_changed: bool) -> None:
+        """Keep the toolbar's tag/flag dropdowns current after mutations.
+
+        They were previously emitted only on deck change, so a tag added via
+        the menu/bulk bar didn't appear in the filter dropdown until the
+        deck was switched.
+        """
+        if self._tree_root is None:
+            return
+        all_cids = col.decks.cids(DeckId(self._tree_root.deck_id), children=True)
+        if notes_changed:
+            self.tags_updated.emit(get_tags_for_cards(col, all_cids))
+        if cards_changed:
+            self.flags_updated.emit(get_flags_for_cards(col, all_cids))
 
     def _refresh_all_header_counts(self, col) -> None:
         """Update all section header counts without touching card content."""

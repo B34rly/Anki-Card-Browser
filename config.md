@@ -39,3 +39,18 @@ view/edit toggle button next to the subdeck search box.
   delete, …) and deck management controls (add card, add/rename/delete subdeck).
 
 Restart Anki after changing this setting.
+
+### `edit_target`
+
+Where the explicit ✎ Edit buttons on card frames take you. (Clicking a
+card always opens its detail popup with the fields directly editable in
+place — that works regardless of this setting.)
+
+- **`"browser"`** (default) — Opens Anki's Browser focused on the card, like
+  before.
+- **`"inline"`** — Opens the card's detail overlay with focus dropped
+  straight into the first field. Save with the button or **Ctrl+Enter**;
+  Revert discards. Image Occlusion notes always open the Browser (their
+  fields hold occlusion data that a free-form editor would corrupt).
+
+Restart Anki after changing this setting.

@@ -28,7 +28,8 @@ from .style import (
     _SVG_ARROW_UP,
     _svg_icon,
 )
-from .filter_bar import FLAG_NAMES, build_filter_panel, build_criteria, build_filter_summary
+from .filter_bar import FLAG_NAMES, build_filter_panel, build_criteria, update_filter_chips
+from .searches import open_saved_search_menu
 
 
 class CardBrowserWidget(QWidget):
@@ -48,6 +49,9 @@ class CardBrowserWidget(QWidget):
         if display_mode not in ("cards", "notes"):
             display_mode = "cards"
         self._default_edit_mode = bool(conf.get("default_edit_mode", True))
+        edit_target = conf.get("edit_target", "browser")
+        if edit_target not in ("browser", "inline"):
+            edit_target = "browser"
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -123,12 +127,19 @@ class CardBrowserWidget(QWidget):
         )
         self._card_search.setClearButtonEnabled(True)
         self._card_search.setMaximumWidth(220)
+        self._saved_search_btn = QPushButton("☆")
+        self._saved_search_btn.setObjectName("sortDirBtn")
+        self._saved_search_btn.setToolTip("Saved searches")
+        self._saved_search_btn.clicked.connect(
+            lambda: open_saved_search_menu(self, self._saved_search_btn)
+        )
         self._search_timer = QTimer()
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(300)
         self._search_timer.timeout.connect(self._apply_filters)
         self._card_search.textChanged.connect(lambda: self._search_timer.start())
         row1_layout.addWidget(self._card_search)
+        row1_layout.addWidget(self._saved_search_btn)
 
         sep1 = QLabel("│")
         sep1.setObjectName("filterLabel")
@@ -164,9 +175,25 @@ class CardBrowserWidget(QWidget):
         self._filter_btn.clicked.connect(self._toggle_filter_panel)
         row2_layout.addWidget(self._filter_btn)
 
-        self._filter_summary = QLabel("")
-        self._filter_summary.setObjectName("filterSummary")
-        row2_layout.addWidget(self._filter_summary, 1)
+        for glyph, tip, collapsed in (
+            ("⊟", "Collapse all subdecks", True),
+            ("⊞", "Expand all subdecks", False),
+        ):
+            btn = QPushButton(glyph)
+            btn.setObjectName("sortDirBtn")
+            btn.setToolTip(tip)
+            btn.clicked.connect(
+                lambda _=False, c=collapsed: self.tray.set_all_collapsed(c)
+            )
+            row2_layout.addWidget(btn)
+
+        # Active advanced filters as removable chips (see filter_bar).
+        chips_box = QWidget()
+        self._active_chips_layout = QHBoxLayout(chips_box)
+        self._active_chips_layout.setContentsMargins(0, 0, 0, 0)
+        self._active_chips_layout.setSpacing(4)
+        row2_layout.addWidget(chips_box)
+        row2_layout.addStretch(1)
 
         sort_label = QLabel("Sort:")
         sort_label.setObjectName("filterLabel")
@@ -201,11 +228,12 @@ class CardBrowserWidget(QWidget):
         self._filter_panel.setVisible(False)
         right_layout.addWidget(self._filter_panel)
 
-        self.tray = CardTray(display_mode=display_mode)
+        self.tray = CardTray(display_mode=display_mode, edit_target=edit_target)
         self.tray.visible_section_changed.connect(self._on_visible_section)
         self.tray.subdeck_created.connect(self._refresh_current_deck)
         self.tray.tags_updated.connect(self._on_tags_updated)
         self.tray.flags_updated.connect(self._on_flags_updated)
+        self.tray.tag_filter_requested.connect(self._on_tag_filter_requested)
         right_layout.addWidget(self.tray, 1)
 
         self._splitter.addWidget(right_panel)
@@ -304,6 +332,15 @@ class CardBrowserWidget(QWidget):
     def _on_chip_toggled(self, _checked: bool) -> None:
         self._apply_filters()
 
+    def _on_tag_filter_requested(self, tag: str) -> None:
+        """A tag pill was clicked in the page — filter by that tag."""
+        idx = self._tag_combo.findData(tag)
+        if idx < 0:
+            self._tag_combo.addItem(tag, userData=tag)
+            idx = self._tag_combo.count() - 1
+        # currentIndexChanged → _apply_filters (no-op when already selected).
+        self._tag_combo.setCurrentIndex(idx)
+
     def _on_tags_updated(self, tags: list) -> None:
         """Called when the tray emits a new tag list for the current deck."""
         prev_tag = self._tag_combo.currentData()
@@ -345,9 +382,8 @@ class CardBrowserWidget(QWidget):
         sort_reverse = not self._sort_ascending
         criteria = build_criteria(self)
 
-        # Update summary label and filter button indicator
-        summary = build_filter_summary(criteria, tag_filter)
-        self._filter_summary.setText(summary)
+        # Update the removable-chip row and filter button indicator
+        update_filter_chips(self, criteria, tag_filter)
         has_advanced = bool(criteria or tag_filter)
         self._filter_btn.setProperty("hasFilters", has_advanced)
         self._filter_btn.style().unpolish(self._filter_btn)

@@ -47,8 +47,16 @@ function cardAction(e, action, cid) {
     pycmd(action + ':' + cid);
 }
 function editCard(e, cid) {
+    /* Explicit ✎ buttons (card pencil / menu) — obeys the edit_target config. */
     e.stopPropagation();
     pycmd('edit_card:' + cid);
+}
+function tagClicked(e, el) {
+    /* A tag pill sets the toolbar's tag filter (the Qt side owns the combo). */
+    e.stopPropagation();
+    if (typeof pycmd === 'function') {
+        pycmd('filter_tag:' + el.getAttribute('data-tag'));
+    }
 }
 function deleteCard(e, cid) {
     e.stopPropagation();

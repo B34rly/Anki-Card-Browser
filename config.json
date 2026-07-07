@@ -1,5 +1,6 @@
 {
     "mode": "embedded",
     "display_mode": "cards",
-    "default_edit_mode": true
+    "default_edit_mode": true,
+    "edit_target": "browser"
 }
