@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import re
 
-from conftest import addon_module
+from conftest import addon_module, deck_node
 
 card_state = addon_module("core.card_state")
 
@@ -175,3 +175,83 @@ def test_collapse_state_persists(tray, fake_mw):
     tray._on_bridge_cmd(f"set_collapsed:{alpha_did}:0")
     saved = fake_mw.col.get_config("cardBrowser_collapsed_decks", [])
     assert alpha_did not in saved
+
+
+# ── match_count_updated ──
+
+
+def test_match_count_updated_on_filtered_render(tray, fake_mw):
+    seen = []
+    tray.match_count_updated.connect(lambda v, t, a: seen.append((v, t, a)))
+
+    tray.set_filters(search_text="banana")
+    assert seen[-1] == (1, 5, True)
+
+
+def test_match_count_updated_on_cleared_filters(tray, fake_mw):
+    seen = []
+    tray.set_filters(search_text="banana")  # filtered first, before connecting
+    tray.match_count_updated.connect(lambda v, t, a: seen.append((v, t, a)))
+
+    tray.set_filters()  # clears every filter
+    assert seen[-1] == (5, 5, False)
+
+
+# ── notetypes_updated ──
+
+
+def test_notetypes_updated_emitted_on_deck_tree_render(tray, fake_mw):
+    seen = []
+    tray.notetypes_updated.connect(seen.append)
+
+    tray.set_deck_tree(deck_node(fake_mw.col, "Parent"), "Parent")
+
+    assert len(seen) == 1
+    pairs = seen[0]
+    assert len(pairs) == 1
+    _mid, name = pairs[0]
+    assert name == "Basic"
+
+
+# ── bridge: focus_search / clear_filters ──
+
+
+def test_focus_search_bridge_emits_signal(tray, fake_mw):
+    seen = []
+    tray.search_focus_requested.connect(lambda: seen.append(True))
+    tray._on_bridge_cmd("focus_search:1")
+    assert seen == [True]
+
+
+def test_clear_filters_bridge_emits_signal(tray, fake_mw):
+    seen = []
+    tray.clear_filters_requested.connect(lambda: seen.append(True))
+    tray._on_bridge_cmd("clear_filters:1")
+    assert seen == [True]
+
+
+# ── page baking: _searchTerm and the empty state ──
+
+
+def test_page_bakes_search_term_for_substring_search(tray, fake_mw):
+    tray.set_filters(search_text="banana")
+    assert 'var _searchTerm = "banana"' in tray._web.page_html
+
+
+def test_page_bakes_blank_search_term_for_anki_query(tray, fake_mw):
+    tray.set_filters(search_text="tag:baking")
+    assert 'var _searchTerm = ""' in tray._web.page_html
+
+
+def test_zero_match_search_renders_empty_state(tray, fake_mw):
+    tray.set_filters(search_text="zzznothing")
+    html = tray._web.page_html
+    assert 'class="empty-state"' in html
+    assert "zzznothing" in html  # the (escaped) query is echoed in the message
+
+
+def test_normal_match_search_has_no_empty_state(tray, fake_mw):
+    tray.set_filters(search_text="banana")
+    # The page's <style> block always defines the .empty-state CSS rule;
+    # only the rendered <div class="empty-state"> marks a zero-match page.
+    assert '<div class="empty-state">' not in tray._web.page_html

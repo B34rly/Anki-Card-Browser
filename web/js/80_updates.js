@@ -24,6 +24,7 @@ function replaceSection(deckId, html) {
     /* The rebuilt HTML comes from Python, which knows nothing of the live
        selection — re-mark the selected units it contains. */
     _reapplySelection(neo);
+    highlightMatches(neo);
 }
 function updateHeaderCounts(deckId, countsHtml) {
     var sec = document.querySelector('[data-deck-id="' + deckId + '"]');
@@ -63,6 +64,7 @@ function _swapUnit(old, id, html) {
     if (typeof _selected !== 'undefined' && _selected.has(String(id))) {
         neo.classList.add('selected');
     }
+    highlightMatches(neo);
     if (container) {
         layoutGrid(container);
         layoutGridOnImages(container);

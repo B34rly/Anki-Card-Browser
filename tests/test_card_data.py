@@ -191,6 +191,26 @@ def test_get_notetypes_for_cards_empty_input(sample_col):
     assert card_data.get_notetypes_for_cards(sample_col, []) == []
 
 
+# ── is_anki_query ──
+
+
+def test_is_anki_query_true_for_known_keywords():
+    for query in ("tag:x", "is:due", "flag:1", "deck:Parent", "nid:123"):
+        assert card_data.is_anki_query(query) is True, query
+
+
+def test_is_anki_query_false_for_plain_text():
+    assert card_data.is_anki_query("banana") is False
+
+
+def test_is_anki_query_false_for_unknown_keyword():
+    assert card_data.is_anki_query("foo:bar") is False
+
+
+def test_is_anki_query_false_for_time_like_text():
+    assert card_data.is_anki_query("12:30") is False
+
+
 # ── is_io_mid / clear_caches ──
 
 

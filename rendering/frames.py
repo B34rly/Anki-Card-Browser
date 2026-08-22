@@ -60,6 +60,30 @@ def build_selection_bar() -> str:
     )
 
 
+def build_empty_state(search_text: str = "") -> str:
+    """A friendly in-page notice for a filtered view with zero matches.
+
+    The clear button routes through pycmd so the Qt toolbar (which owns the
+    filter controls) resets everything via its normal clear-all path.
+    """
+    if search_text:
+        msg = f"No cards match &ldquo;{_esc(search_text)}&rdquo;"
+    else:
+        msg = "No cards match the current filters"
+    return (
+        '<div class="empty-state">'
+        '<div class="empty-state-icon">'
+        '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+        'stroke-linejoin="round"><circle cx="11" cy="11" r="8"/>'
+        '<path d="m21 21-4.3-4.3"/></svg></div>'
+        f'<div class="empty-state-msg">{msg}</div>'
+        '<button class="empty-state-clear" '
+        "onclick=\"pycmd('clear_filters:1')\">Clear all filters</button>"
+        "</div>"
+    )
+
+
 def frame_classes(state: str, suspended: bool, buried: bool = False, *extra: str) -> str:
     """Class list for a card frame; suspended outranks buried, then the state."""
     parts = ["card-frame", *extra]

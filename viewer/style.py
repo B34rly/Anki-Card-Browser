@@ -86,6 +86,12 @@ QLabel#filterLabel {
     color: palette(mid);
     padding: 0 2px;
 }
+QLabel#matchCount {
+    font-size: 12px;
+    font-weight: 600;
+    color: palette(highlight);
+    padding: 0 4px;
+}
 QFrame#filterPanel {
     background: palette(base);
     border: 1px solid palette(mid);

@@ -126,6 +126,16 @@ _ANKI_SEARCH_KEYWORD_RE = re.compile(
 )
 
 
+def is_anki_query(query: str) -> bool:
+    """True when *query* will be treated as Anki search syntax (keyword:…).
+
+    Exposed for callers that must mirror the search-path decision without
+    running the search — e.g. match highlighting only applies to substring
+    searches, where the typed text is literally what matched.
+    """
+    return bool(_ANKI_SEARCH_KEYWORD_RE.search(query))
+
+
 def search_cards_with_anki_query(
     col, card_ids: Sequence[int], query: str
 ) -> list[int] | None:
@@ -136,7 +146,7 @@ def search_cards_with_anki_query(
     when the query isn't Anki syntax or fails to parse, so the caller can
     fall back to plain substring search.
     """
-    if not _ANKI_SEARCH_KEYWORD_RE.search(query):
+    if not is_anki_query(query):
         return None
     try:
         found = set(col.find_cards(query))

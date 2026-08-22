@@ -77,6 +77,7 @@ function fillCards(data) {
                 if (typeof _selected !== 'undefined' && _selected.has(key)) {
                     card.classList.add('selected');
                 }
+                highlightMatches(card);
                 el.parentNode.replaceChild(card, el);
                 var container = card.closest('.deck-cards');
                 if (container) affectedContainers.add(container);
@@ -91,7 +92,10 @@ function fillCards(data) {
 
 function fillNoteCards(gk, html) {
     var body = document.getElementById('note-cards-' + gk);
-    if (body) body.innerHTML = html;
+    if (body) {
+        body.innerHTML = html;
+        highlightMatches(body);
+    }
 }
 
 function initLazy() {

@@ -15,6 +15,7 @@ from .detail import (
 from .frames import (
     FLAG_COLORS,
     build_card_menu,
+    build_empty_state,
     build_flag_indicator,
     build_flag_row,
     build_selection_bar,
@@ -34,6 +35,7 @@ __all__ = [
     "FLAG_COLORS",
     "build_card_menu",
     "build_detail_actions",
+    "build_empty_state",
     "build_detail_html",
     "build_editable_fields",
     "build_flag_indicator",

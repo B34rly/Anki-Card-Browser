@@ -686,3 +686,28 @@ body.selection-open { padding-bottom: 74px; }
 .sel-danger:hover { border-color: #e74c3c; }
 .sel-close { color: GrayText; }
 body.view-mode #selection-bar { display: none; }
+
+/* ── Search: match highlighting + zero-match empty state ── */
+mark.search-hit {
+    background: color-mix(in srgb, Highlight 32%, transparent);
+    color: inherit;
+    border-radius: 2px;
+    padding: 0 1px;
+}
+.empty-state {
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+    padding: 64px 24px; text-align: center;
+    color: color-mix(in srgb, CanvasText 55%, Canvas);
+}
+.empty-state-icon { opacity: 0.6; }
+.empty-state-msg { font-size: 14px; }
+.empty-state-clear {
+    padding: 5px 14px; border: 1px solid color-mix(in srgb, CanvasText 18%, Canvas);
+    border-radius: 6px; background: Canvas; color: CanvasText;
+    font-size: 12px; cursor: pointer;
+    transition: background 0.1s ease, border-color 0.1s ease;
+}
+.empty-state-clear:hover {
+    background: color-mix(in srgb, CanvasText 8%, Canvas);
+    border-color: color-mix(in srgb, CanvasText 25%, Canvas);
+}

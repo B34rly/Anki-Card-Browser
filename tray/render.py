@@ -18,9 +18,12 @@ from aqt import mw
 from ..core.card_data import (
     get_cards_metadata,
     get_flags_for_cards,
+    get_notetypes_for_cards,
     get_tags_for_cards,
+    is_anki_query,
+    notetype_names,
 )
-from ..rendering import build_selection_bar, render_normal_card
+from ..rendering import build_empty_state, build_selection_bar, render_normal_card
 from ..core.card_state import get_state_colors
 from . import builder as builder_mod
 from .assets import tray_css, tray_js
@@ -76,14 +79,21 @@ class RenderMixin:
         # (membership by deck) and pinpointed (mod-time watermark).
         self._tracker.snapshot(meta)
 
-        # Emit available tags and flags for the toolbar (only on deck change)
+        # Emit available tags/flags/notetypes for the toolbar (only on deck
+        # change). meta already carries every card's mid — no notetype SQL.
         if emit_tags:
             self.tags_updated.emit(get_tags_for_cards(col, all_cids))
             self.flags_updated.emit(get_flags_for_cards(col, all_cids))
+            self.notetypes_updated.emit(
+                notetype_names(col, {m["mid"] for m in meta.values()})
+            )
 
         # One filter pass over the whole subtree; sections intersect against it.
         allowed = compute_allowed(col, all_cids, meta, today, self._filters)
         visible = all_cids if allowed is None else [c for c in all_cids if c in allowed]
+        self.match_count_updated.emit(
+            len(visible), len(all_cids), self._filters.active
+        )
         # One eager decision per render; targeted section refreshes reuse it
         # (filters can't change without another full render) but may upgrade
         # small sections to eager — see refresh_section.
@@ -116,6 +126,10 @@ class RenderMixin:
         if root_cards:
             body += f'<div class="deck-cards">{root_cards}</div>'
         body += child_sections
+        if self._filters.active and not visible:
+            # Sections without hits are hidden entirely, so a zero-match
+            # filter would otherwise leave a silent, blank page.
+            body += build_empty_state(self._filters.search_text)
 
         self._render_page(body, restore_scroll=True)
 
@@ -132,6 +146,11 @@ class RenderMixin:
             f"{k}: {v};" for k, v in color_map.items()
         ) + " }"
         mode_js = "true" if self._edit_mode else "false"
+        # Highlight only substring searches — for Anki-syntax queries the
+        # typed text is an expression, not the matched content.
+        term = self._filters.search_text
+        if term and is_anki_query(term):
+            term = ""
         self._web.stdHtml(
             f"<style>{color_vars}\n{tray_css()}</style>"
             f"{body_html}"
@@ -144,7 +163,8 @@ class RenderMixin:
             f'  </div>'
             f'</div>'
             f"{build_selection_bar()}"
-            f"<script>var _initialEditMode = {mode_js};</script>"
+            f"<script>var _initialEditMode = {mode_js};"
+            f" var _searchTerm = {json.dumps(term)};</script>"
             f"<script>{tray_js()}</script>",
             context=self,
         )
@@ -230,6 +250,7 @@ class RenderMixin:
         all_cids = col.decks.cids(DeckId(self._tree_root.deck_id), children=True)
         if notes_changed:
             self.tags_updated.emit(get_tags_for_cards(col, all_cids))
+            self.notetypes_updated.emit(get_notetypes_for_cards(col, all_cids))
         if cards_changed:
             self.flags_updated.emit(get_flags_for_cards(col, all_cids))
 
@@ -268,6 +289,11 @@ class RenderMixin:
         visible = all_cids if allowed is None else [c for c in all_cids if c in allowed]
         self.title = self._builder.title_text(
             col, self._tree_name, visible, all_cids, meta, today
+        )
+        # Targeted refreshes change counts without a full render — keep the
+        # toolbar's match label in step with the title.
+        self.match_count_updated.emit(
+            len(visible), len(all_cids), self._filters.active
         )
 
     # ── Tree lookups ──

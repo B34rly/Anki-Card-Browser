@@ -1,9 +1,13 @@
-"""Saved searches: named queries persisted in the collection config.
+"""Saved searches and search history, persisted in the collection config.
 
 One toolbar button opens a menu of saved searches; picking one applies it,
 "Save current search…" names and stores the box's text, and a Remove
 submenu deletes entries. Storage is a {name: query} dict in the collection
 config, so it syncs with the profile like the collapse state does.
+
+Search history is a most-recent-first list of committed queries (Enter /
+focus-out with text in the box). It feeds the search box's completer and a
+Recent section in the same menu.
 """
 from __future__ import annotations
 
@@ -11,6 +15,35 @@ from aqt import mw
 from aqt.qt import QInputDialog, QMenu
 
 _SAVED_SEARCH_KEY = "cardBrowser_saved_searches"
+_HISTORY_KEY = "cardBrowser_search_history"
+_HISTORY_MAX = 12
+_MENU_RECENT_MAX = 6
+
+
+def load_history(col) -> list[str]:
+    """Recent queries, most recent first (empty on bad/missing config)."""
+    try:
+        saved = col.get_config(_HISTORY_KEY, [])
+        if isinstance(saved, list):
+            return [q.strip() for q in saved if isinstance(q, str) and q.strip()]
+    except Exception:
+        pass
+    return []
+
+
+def push_history(col, query: str) -> list[str]:
+    """Record a committed *query* (moved to the front, deduped, trimmed)."""
+    query = query.strip()
+    history = load_history(col)
+    if not query:
+        return history
+    history = [query] + [q for q in history if q.lower() != query.lower()]
+    history = history[:_HISTORY_MAX]
+    try:
+        col.set_config(_HISTORY_KEY, history)
+    except Exception:
+        pass
+    return history
 
 
 def load_saved_searches(col) -> dict[str, str]:
@@ -48,6 +81,18 @@ def open_saved_search_menu(widget, anchor_btn) -> None:
         act.setToolTip(query)
         act.triggered.connect(lambda _=False, q=query: apply_query(q))
     if saved:
+        menu.addSeparator()
+
+    # Recent committed queries that aren't already saved under a name.
+    saved_queries = {q.lower() for q in saved.values()}
+    recent = [
+        q for q in load_history(col) if q.lower() not in saved_queries
+    ][:_MENU_RECENT_MAX]
+    if recent:
+        menu.addSection("Recent")
+        for query in recent:
+            act = menu.addAction(query)
+            act.triggered.connect(lambda _=False, q=query: apply_query(q))
         menu.addSeparator()
 
     save_act = menu.addAction("Save current search…")

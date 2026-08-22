@@ -6,8 +6,12 @@ from aqt.qt import (
     QHBoxLayout,
     QVBoxLayout,
     QComboBox,
+    QCompleter,
+    QKeySequence,
     QLineEdit,
+    QShortcut,
     QSplitter,
+    QStringListModel,
     QToolButton,
     QLabel,
     QPushButton,
@@ -28,8 +32,15 @@ from .style import (
     _SVG_ARROW_UP,
     _svg_icon,
 )
-from .filter_bar import FLAG_NAMES, build_filter_panel, build_criteria, update_filter_chips
-from .searches import open_saved_search_menu
+from .filter_bar import (
+    FLAG_NAMES,
+    _silent_reset_combo,
+    _silent_reset_spins,
+    build_criteria,
+    build_filter_panel,
+    update_filter_chips,
+)
+from .searches import load_history, open_saved_search_menu, push_history
 
 
 class CardBrowserWidget(QWidget):
@@ -119,14 +130,22 @@ class CardBrowserWidget(QWidget):
         row1_layout.setSpacing(6)
 
         self._card_search = QLineEdit()
-        self._card_search.setPlaceholderText("Search card content…")
+        self._card_search.setPlaceholderText("Search card content…  (Ctrl+F)")
         self._card_search.setToolTip(
             "Plain text searches note content.\n"
             "Queries with a colon use Anki search syntax, e.g.\n"
-            "tag:leech · is:due · flag:1 · added:7 · prop:ivl>=10"
+            "tag:leech · is:due · flag:1 · added:7 · prop:ivl>=10\n"
+            "Ctrl+F or / focuses this box from anywhere."
         )
         self._card_search.setClearButtonEnabled(True)
-        self._card_search.setMaximumWidth(220)
+        self._card_search.setMaximumWidth(240)
+        # Recent committed queries feed an inline completer (and the ☆ menu).
+        self._history_model = QStringListModel()
+        completer = QCompleter(self._history_model, self._card_search)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self._card_search.setCompleter(completer)
+        self._card_search.editingFinished.connect(self._commit_search_history)
         self._saved_search_btn = QPushButton("☆")
         self._saved_search_btn.setObjectName("sortDirBtn")
         self._saved_search_btn.setToolTip("Saved searches")
@@ -141,6 +160,18 @@ class CardBrowserWidget(QWidget):
         row1_layout.addWidget(self._card_search)
         row1_layout.addWidget(self._saved_search_btn)
 
+        # Live match count ("17 matches") — visible only while filtering.
+        self._match_label = QLabel("")
+        self._match_label.setObjectName("matchCount")
+        self._match_label.setVisible(False)
+        row1_layout.addWidget(self._match_label)
+
+        # Ctrl+F from anywhere in the browser focuses the search box (the
+        # page JS bridges the same for Ctrl+F// while the webview has focus).
+        shortcut = QShortcut(QKeySequence.StandardKey.Find, self)
+        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        shortcut.activated.connect(self._focus_search)
+
         sep1 = QLabel("│")
         sep1.setObjectName("filterLabel")
         row1_layout.addWidget(sep1)
@@ -152,6 +183,7 @@ class CardBrowserWidget(QWidget):
             "due": "Due",
             "upcoming": "Upcoming",
             "suspended": "Suspended",
+            "buried": "Buried",
         }
         for key, label in chip_labels.items():
             btn = QPushButton(label)
@@ -233,7 +265,11 @@ class CardBrowserWidget(QWidget):
         self.tray.subdeck_created.connect(self._refresh_current_deck)
         self.tray.tags_updated.connect(self._on_tags_updated)
         self.tray.flags_updated.connect(self._on_flags_updated)
+        self.tray.notetypes_updated.connect(self._on_notetypes_updated)
         self.tray.tag_filter_requested.connect(self._on_tag_filter_requested)
+        self.tray.match_count_updated.connect(self._on_match_count)
+        self.tray.search_focus_requested.connect(self._focus_search)
+        self.tray.clear_filters_requested.connect(self._clear_all_filters)
         right_layout.addWidget(self.tray, 1)
 
         self._splitter.addWidget(right_panel)
@@ -269,6 +305,7 @@ class CardBrowserWidget(QWidget):
         *force_render* for deck-structure changes (a rename keeps the same deck
         id but still needs a re-render).
         """
+        self._reload_search_history()
         prev = self._combo.currentData()
         self._combo.blockSignals(True)
         self._combo.clear()
@@ -297,8 +334,11 @@ class CardBrowserWidget(QWidget):
             return
         deck_name = self._combo.itemText(index)
 
-        # Rebuild the sidebar tree
+        # Rebuild the sidebar tree (re-applying any active name filter —
+        # populate resets the tree to the saved expansion state).
         self._deck_tree.populate(node, deck_name)
+        if self._search.text().strip():
+            self._deck_tree.filter(self._search.text())
 
         # Render all subdecks in a continuous scroll
         self.tray.set_deck_tree(node, deck_name)
@@ -341,34 +381,71 @@ class CardBrowserWidget(QWidget):
         # currentIndexChanged → _apply_filters (no-op when already selected).
         self._tag_combo.setCurrentIndex(idx)
 
+    @staticmethod
+    def _repopulate_filter_combo(combo, default_label: str, default_data, items) -> None:
+        """Rebuild a filter combo's rows, preserving the current selection.
+
+        *items* is (data, label) pairs; the "all" entry is row 0. A previous
+        selection that vanished from the deck falls back to the default (the
+        default datas — "" and 0 — are falsy, so they never trigger a lookup).
+        """
+        prev = combo.currentData()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem(default_label, userData=default_data)
+        for data, label in items:
+            combo.addItem(label, userData=data)
+        if prev:
+            idx = combo.findData(prev)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+        combo.blockSignals(False)
+
     def _on_tags_updated(self, tags: list) -> None:
         """Called when the tray emits a new tag list for the current deck."""
-        prev_tag = self._tag_combo.currentData()
-        self._tag_combo.blockSignals(True)
-        self._tag_combo.clear()
-        self._tag_combo.addItem("All tags", userData="")
-        for t in tags:
-            self._tag_combo.addItem(t, userData=t)
-        if prev_tag:
-            idx = self._tag_combo.findData(prev_tag)
-            if idx >= 0:
-                self._tag_combo.setCurrentIndex(idx)
-        self._tag_combo.blockSignals(False)
+        self._repopulate_filter_combo(
+            self._tag_combo, "All tags", "", [(t, t) for t in tags]
+        )
 
     def _on_flags_updated(self, flags: list) -> None:
         """Called when the tray emits flag values present in the current deck."""
-        prev_flag = self._flag_combo.currentData()
-        self._flag_combo.blockSignals(True)
-        self._flag_combo.clear()
-        self._flag_combo.addItem("Any flag", userData=0)
-        for f in flags:
-            name = FLAG_NAMES.get(f, f"Flag {f}")
-            self._flag_combo.addItem(name, userData=f)
-        if prev_flag:
-            idx = self._flag_combo.findData(prev_flag)
-            if idx >= 0:
-                self._flag_combo.setCurrentIndex(idx)
-        self._flag_combo.blockSignals(False)
+        self._repopulate_filter_combo(
+            self._flag_combo, "Any flag", 0,
+            [(f, FLAG_NAMES.get(f, f"Flag {f}")) for f in flags],
+        )
+
+    def _on_notetypes_updated(self, pairs: list) -> None:
+        """Called when the tray emits (mid, name) notetype pairs for the deck."""
+        self._repopulate_filter_combo(
+            self._notetype_combo, "All notetypes", 0, pairs
+        )
+
+    # ── Search box helpers ──
+
+    def _focus_search(self) -> None:
+        """Put the cursor in the card-search box (Ctrl+F, / from the page)."""
+        self._card_search.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self._card_search.selectAll()
+
+    def _on_match_count(self, visible: int, total: int, filtered: bool) -> None:
+        """Show "N matches" beside the box while any filter is active."""
+        if not filtered:
+            self._match_label.setVisible(False)
+            return
+        noun = "match" if visible == 1 else "matches"
+        self._match_label.setText(f"{visible} {noun}")
+        self._match_label.setVisible(True)
+
+    def _commit_search_history(self) -> None:
+        """Record the query on Enter/focus-out; keeps the completer current."""
+        text = self._card_search.text().strip()
+        if not text or mw.col is None:
+            return
+        self._history_model.setStringList(push_history(mw.col, text))
+
+    def _reload_search_history(self) -> None:
+        if mw.col is not None:
+            self._history_model.setStringList(load_history(mw.col))
 
     def _apply_filters(self) -> None:
         """Gather current filter/sort state and push to the tray."""
@@ -392,27 +469,19 @@ class CardBrowserWidget(QWidget):
         self.tray.set_filters(search_text, active_chips, tag_filter, sort_key, sort_reverse, criteria)
 
     def _clear_all_filters(self) -> None:
-        """Reset all filter controls to defaults."""
-        # Block signals during reset to avoid repeated re-renders
+        """Reset all filter controls to defaults (silently, then apply once)."""
         for btn in self._chip_buttons.values():
             btn.blockSignals(True)
             btn.setChecked(False)
             btn.blockSignals(False)
-        self._tag_combo.blockSignals(True)
-        self._tag_combo.setCurrentIndex(0)
-        self._tag_combo.blockSignals(False)
-        self._flag_combo.blockSignals(True)
-        self._flag_combo.setCurrentIndex(0)
-        self._flag_combo.blockSignals(False)
-        for sb in (self._ease_min, self._ease_max, self._ivl_min, self._ivl_max,
-                    self._lapse_min, self._lapse_max, self._reps_min, self._reps_max):
-            sb.blockSignals(True)
-            sb.setValue(0)
-            sb.blockSignals(False)
+        for combo in (self._tag_combo, self._flag_combo,
+                      self._notetype_combo, self._sort_combo):
+            _silent_reset_combo(combo)
+        _silent_reset_spins(
+            self._ease_min, self._ease_max, self._ivl_min, self._ivl_max,
+            self._lapse_min, self._lapse_max, self._reps_min, self._reps_max,
+        )
         self._card_search.clear()
-        self._sort_combo.blockSignals(True)
-        self._sort_combo.setCurrentIndex(0)
-        self._sort_combo.blockSignals(False)
         self._sort_ascending = True
         self._update_sort_dir_icon()
         self._apply_filters()

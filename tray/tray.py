@@ -76,6 +76,19 @@ class CardTray(QWidget, RenderMixin, RefreshMixin):
     # toolbar's tag filter — the combo lives on the Qt side)
     tag_filter_requested = pyqtSignal(str)
 
+    # Emits sorted [(mid, name)] notetype pairs for the current deck
+    notetypes_updated = pyqtSignal(list)
+
+    # Emits (visible, total, filters_active) card counts after each render,
+    # so the toolbar can show a match count right next to the search box
+    match_count_updated = pyqtSignal(int, int, bool)
+
+    # The page asked for the toolbar's search box (Ctrl+F or / in the grid)
+    search_focus_requested = pyqtSignal()
+
+    # The page's empty-state "Clear all filters" button was clicked
+    clear_filters_requested = pyqtSignal()
+
     def __init__(
         self, title: str = "", parent=None, display_mode: str = "cards",
         edit_target: str = "browser",
@@ -300,6 +313,12 @@ class CardTray(QWidget, RenderMixin, RefreshMixin):
 
     def _on_filter_tag(self, col, payload: str) -> None:
         self.tag_filter_requested.emit(payload)
+
+    def _on_focus_search(self, col, payload: str) -> None:
+        self.search_focus_requested.emit()
+
+    def _on_clear_filters(self, col, payload: str) -> None:
+        self.clear_filters_requested.emit()
 
     def _on_set_collapsed(self, col, payload: str) -> None:
         # Persisted so it survives reopen. The payload carries the explicit
@@ -572,6 +591,8 @@ class CardTray(QWidget, RenderMixin, RefreshMixin):
         "scroll": _on_scroll,
         "visible_section": _on_visible_section,
         "filter_tag": _on_filter_tag,
+        "focus_search": _on_focus_search,
+        "clear_filters": _on_clear_filters,
         "set_collapsed": _on_set_collapsed,
         "lazy_load": RenderMixin._on_lazy_load,
         "lazy_load_note_cards": RenderMixin._on_lazy_load_note_cards,
