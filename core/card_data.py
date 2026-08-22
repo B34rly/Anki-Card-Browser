@@ -167,6 +167,34 @@ def search_cards_by_content(col, card_ids: Sequence[int], query: str) -> list[in
     return matched
 
 
+def notetype_names(col, mids) -> list[tuple[int, str]]:
+    """Name-sorted (mid, name) pairs for a set of notetype ids.
+
+    Callers holding card metadata already have the mids
+    (``{m["mid"] for m in meta.values()}``) — no SQL needed.
+    """
+    pairs: list[tuple[int, str]] = []
+    for mid in mids:
+        nt = col.models.get(mid)
+        pairs.append((mid, nt["name"] if nt else f"Notetype {mid}"))
+    return sorted(pairs, key=lambda p: p[1].lower())
+
+
+def get_notetypes_for_cards(col, card_ids: Sequence[int]) -> list[tuple[int, str]]:
+    """Sorted (mid, name) pairs of the notetypes present among *card_ids*."""
+    if not card_ids:
+        return []
+    mids: set[int] = set()
+    for (mid,) in _query_in_chunks(
+        col,
+        "SELECT DISTINCT n.mid FROM cards c JOIN notes n ON c.nid = n.id "
+        "WHERE c.id IN ({ph})",
+        card_ids,
+    ):
+        mids.add(mid)
+    return notetype_names(col, mids)
+
+
 def get_tags_for_cards(col, card_ids: Sequence[int]) -> list[str]:
     """Return sorted distinct tags from notes associated with the given cards."""
     if not card_ids:

@@ -31,6 +31,7 @@ FILTER_CHIP_STATES: dict[str, list[str]] = {
     "due": ["review-due"],
     "upcoming": ["review-soon", "review-mid", "review-later"],
     "suspended": [],  # special: matches queue == QUEUE_TYPE_SUSPENDED
+    "buried": [],     # special: matches the two buried queues
 }
 
 # ── SVG icons for the state badge ──
@@ -202,21 +203,24 @@ def filter_cards_by_states(
     # Expand chip names into allowed state strings
     allowed_states: set[str] = set()
     include_suspended = "suspended" in active_chips
+    include_buried = "buried" in active_chips
     for chip in active_chips:
         if chip in FILTER_CHIP_STATES:
             allowed_states.update(FILTER_CHIP_STATES[chip])
 
     result: set[int] = set()
     for cid, m in meta.items():
-        is_susp = m["queue"] == QUEUE_TYPE_SUSPENDED
-        if include_suspended and is_susp:
-            result.add(cid)
+        q = m["queue"]
+        # Suspended/buried are queue conditions, not visual states — each
+        # matches only its own chip. (When no chips are active at all we
+        # return early above, so both remain visible in the unfiltered view.)
+        if q == QUEUE_TYPE_SUSPENDED:
+            if include_suspended:
+                result.add(cid)
             continue
-        if not include_suspended and is_susp:
-            # A state chip is active but "Suspended" is not among the active
-            # chips, so suspended cards are excluded from the result. (When no
-            # chips are active at all we return early above and never reach
-            # here, so suspended cards remain visible in the unfiltered view.)
+        if q in (QUEUE_TYPE_MANUALLY_BURIED, QUEUE_TYPE_SIBLING_BURIED):
+            if include_buried:
+                result.add(cid)
             continue
         state = card_state_from_meta(m, today)
         if state in allowed_states:
@@ -329,6 +333,7 @@ def filter_cards_by_criteria(
 
     Supported keys (all optional):
       flag       — int, exact flag match (1-7). 0 or absent = any flag.
+      notetype   — int, notetype (model) id. 0 or absent = any notetype.
       min_ease   — int, minimum ease factor (permille, e.g. 1500 = 150%).
       max_ease   — int, maximum ease factor.
       min_ivl    — int, minimum interval in days.
@@ -344,6 +349,7 @@ def filter_cards_by_criteria(
         return set(meta.keys())
 
     flag = criteria.get("flag", 0)
+    notetype = criteria.get("notetype", 0)
     min_ease = criteria.get("min_ease")
     max_ease = criteria.get("max_ease")
     min_ivl = criteria.get("min_ivl")
@@ -356,6 +362,8 @@ def filter_cards_by_criteria(
     result: set[int] = set()
     for cid, m in meta.items():
         if flag and m.get("flags", 0) != flag:
+            continue
+        if notetype and m.get("mid", 0) != notetype:
             continue
         f = m.get("factor", 0)
         if min_ease is not None and f < min_ease:

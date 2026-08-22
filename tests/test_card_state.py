@@ -6,6 +6,7 @@ any of these, they operate purely on the queue/type/due/... fields.
 """
 from __future__ import annotations
 
+from anki.cards import CardId
 from anki.consts import (
     QUEUE_TYPE_NEW,
     QUEUE_TYPE_LRN,
@@ -223,6 +224,64 @@ def test_filter_by_states_new_and_suspended_together():
     assert result == {1, 5}
 
 
+# ── filter_cards_by_states: "buried" chip (analogous to "suspended") ──
+
+
+def _buried_meta():
+    return {
+        1: _meta(QUEUE_TYPE_NEW, CARD_TYPE_NEW, 5),                 # new
+        2: _meta(QUEUE_TYPE_MANUALLY_BURIED, CARD_TYPE_REV, TODAY),  # buried (manual)
+        3: _meta(QUEUE_TYPE_SIBLING_BURIED, CARD_TYPE_REV, TODAY),   # buried (sibling)
+        4: _meta(QUEUE_TYPE_SUSPENDED, CARD_TYPE_REV, TODAY),        # suspended
+    }
+
+
+def test_filter_by_states_buried_chip_matches_both_buried_queues():
+    meta = _buried_meta()
+    assert card_state.filter_cards_by_states(meta, TODAY, {"buried"}) == {2, 3}
+
+
+def test_filter_by_states_buried_excluded_when_other_chips_active():
+    meta = _buried_meta()
+    # "new" alone should not pull in either buried card, mirroring the
+    # existing suspended-exclusion behaviour.
+    result = card_state.filter_cards_by_states(meta, TODAY, {"new"})
+    assert result == {1}
+    assert 2 not in result and 3 not in result
+
+
+def test_filter_by_states_new_and_buried_together():
+    meta = _buried_meta()
+    result = card_state.filter_cards_by_states(meta, TODAY, {"new", "buried"})
+    assert result == {1, 2, 3}
+
+
+def test_filter_by_states_suspended_behaviour_unchanged_alongside_buried():
+    """Suspended still matches only its own chip even with buried cards
+    present in the same meta set (regression guard for the new special)."""
+    meta = _buried_meta()
+    assert card_state.filter_cards_by_states(meta, TODAY, {"suspended"}) == {4}
+    result = card_state.filter_cards_by_states(meta, TODAY, {"suspended", "buried"})
+    assert result == {2, 3, 4}
+
+
+def test_filter_by_states_buried_chip_real_collection(sample_col):
+    """Sanity-check the queue value a real bury_cards() call produces is one
+    of the two queues the 'buried' chip is documented to match."""
+    card_data = addon_module("core.card_data")
+    cids = sample_col._test_cids
+    sample_col.sched.bury_cards([CardId(cids["apple"])])
+
+    meta = card_data.get_cards_metadata(sample_col, list(cids.values()))
+    today = sample_col.sched.today
+
+    buried = card_state.filter_cards_by_states(meta, today, {"buried"})
+    assert cids["apple"] in buried
+
+    not_buried = card_state.filter_cards_by_states(meta, today, {"new"})
+    assert cids["apple"] not in not_buried
+
+
 # ── filter_cards_by_criteria ──
 
 
@@ -243,6 +302,23 @@ def test_filter_by_criteria_flag_exact_match():
     meta = _criteria_meta()
     assert card_state.filter_cards_by_criteria(meta, {"flag": 1}) == {1}
     assert card_state.filter_cards_by_criteria(meta, {"flag": 2}) == {2}
+
+
+def test_filter_by_criteria_notetype_filters_by_mid():
+    meta = _criteria_meta()
+    meta[1]["mid"] = 100
+    meta[2]["mid"] = 200
+    meta[3]["mid"] = 200
+    assert card_state.filter_cards_by_criteria(meta, {"notetype": 100}) == {1}
+    assert card_state.filter_cards_by_criteria(meta, {"notetype": 200}) == {2, 3}
+
+
+def test_filter_by_criteria_notetype_zero_or_absent_means_any():
+    meta = _criteria_meta()
+    meta[1]["mid"] = 100
+    meta[2]["mid"] = 200
+    assert card_state.filter_cards_by_criteria(meta, {"notetype": 0}) == set(meta.keys())
+    assert card_state.filter_cards_by_criteria(meta, {}) == set(meta.keys())
 
 
 def test_filter_by_criteria_min_max_ease():

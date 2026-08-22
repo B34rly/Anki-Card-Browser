@@ -164,6 +164,33 @@ def test_get_flags_for_cards_empty_input(sample_col):
     assert card_data.get_flags_for_cards(sample_col, []) == []
 
 
+# ── get_notetypes_for_cards ──
+
+
+def test_get_notetypes_for_cards_single_type(sample_col):
+    basic_mid = sample_col.models.by_name("Basic")["id"]
+    cids = list(sample_col._test_cids.values())
+    assert card_data.get_notetypes_for_cards(sample_col, cids) == [(basic_mid, "Basic")]
+
+
+def test_get_notetypes_for_cards_multiple_sorted_by_name(sample_col):
+    basic_mid = sample_col.models.by_name("Basic")["id"]
+    reversed_nt = sample_col.models.by_name("Basic (and reversed card)")
+    note = sample_col.new_note(reversed_nt)
+    note["Front"] = "front side"
+    note["Back"] = "back side"
+    sample_col.add_note(note, sample_col.decks.id("Parent::Beta"))
+
+    all_cids = list(sample_col._test_cids.values()) + list(note.card_ids())
+    pairs = card_data.get_notetypes_for_cards(sample_col, all_cids)
+    assert pairs == [(basic_mid, "Basic"), (reversed_nt["id"], "Basic (and reversed card)")]
+    assert pairs == sorted(pairs, key=lambda p: p[1].lower())
+
+
+def test_get_notetypes_for_cards_empty_input(sample_col):
+    assert card_data.get_notetypes_for_cards(sample_col, []) == []
+
+
 # ── is_io_mid / clear_caches ──
 
 

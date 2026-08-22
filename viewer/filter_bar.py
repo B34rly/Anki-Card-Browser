@@ -40,6 +40,13 @@ def build_filter_panel(widget) -> QFrame:
     widget._flag_combo.currentIndexChanged.connect(widget._apply_filters)
     form.addRow("Flag:", widget._flag_combo)
 
+    # Notetype
+    widget._notetype_combo = QComboBox()
+    widget._notetype_combo.addItem("All notetypes", userData=0)
+    widget._notetype_combo.setMinimumWidth(140)
+    widget._notetype_combo.currentIndexChanged.connect(widget._apply_filters)
+    form.addRow("Notetype:", widget._notetype_combo)
+
     widget._ease_min, widget._ease_max = _add_range_row(widget, form, "Ease:", 999, "%")
     widget._ivl_min, widget._ivl_max = _add_range_row(widget, form, "Interval:", 99999, " d")
     widget._lapse_min, widget._lapse_max = _add_range_row(widget, form, "Lapses:", 99999)
@@ -87,6 +94,9 @@ def build_criteria(widget) -> dict:
     flag = widget._flag_combo.currentData()
     if flag:
         criteria["flag"] = flag
+    notetype = widget._notetype_combo.currentData()
+    if notetype:
+        criteria["notetype"] = notetype
     ranges = (
         # Ease is entered as % but filtered in permille, hence the ×10.
         ("min_ease", widget._ease_min, 10), ("max_ease", widget._ease_max, 10),
@@ -125,6 +135,11 @@ def _chip_specs(widget, criteria: dict, tag_filter: str) -> list[tuple]:
         specs.append((
             f"Flag: {FLAG_NAMES.get(criteria['flag'], '?')}",
             lambda: _silent_reset_combo(widget._flag_combo),
+        ))
+    if criteria.get("notetype"):
+        specs.append((
+            f"Type: {widget._notetype_combo.currentText()}",
+            lambda: _silent_reset_combo(widget._notetype_combo),
         ))
     ranges = (
         # (label, min key, max key, unit, divisor back to display units)
