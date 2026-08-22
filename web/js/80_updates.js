@@ -25,6 +25,7 @@ function replaceSection(deckId, html) {
        selection — re-mark the selected units it contains. */
     _reapplySelection(neo);
     highlightMatches(neo);
+    _reapplyKbFocus(neo);
 }
 function updateHeaderCounts(deckId, countsHtml) {
     var sec = document.querySelector('[data-deck-id="' + deckId + '"]');
@@ -65,6 +66,7 @@ function _swapUnit(old, id, html) {
         neo.classList.add('selected');
     }
     highlightMatches(neo);
+    _reapplyKbFocus(neo);
     if (container) {
         layoutGrid(container);
         layoutGridOnImages(container);

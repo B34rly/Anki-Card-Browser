@@ -78,6 +78,7 @@ function fillCards(data) {
                     card.classList.add('selected');
                 }
                 highlightMatches(card);
+                _reapplyKbFocus(card);
                 el.parentNode.replaceChild(card, el);
                 var container = card.closest('.deck-cards');
                 if (container) affectedContainers.add(container);
