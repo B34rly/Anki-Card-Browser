@@ -62,11 +62,14 @@ function _selectRangeTo(el) {
     updateSelectionBar();
 }
 
-/* Ctrl/Cmd+A selects every rendered unit (which already respects the active
-   filters — filtered-out cards aren't in the DOM). */
+/* Ctrl/Cmd+A selects every visible rendered unit: filtered-out cards aren't
+   in the DOM, and units inside a collapsed section are skipped so "select
+   all" matches what the user can actually see. (.collapsed covers persisted
+   collapse, mid-animation collapse, and initial height:0 renders alike.) */
 function selectAll() {
     if (!_editMode) return;
     _detailUnits().forEach(function(el) {
+        if (el.closest('.deck-body.collapsed')) return;
         var id = _selId(el);
         if (id && !_selected.has(id)) {
             _selected.add(id);

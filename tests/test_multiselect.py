@@ -99,6 +99,44 @@ def test_dom_select_all_and_body_padding_class(qapp, tray, fake_mw):
         page.close()
 
 
+def test_dom_select_all_skips_collapsed_sections(qapp, tray, fake_mw):
+    """Ctrl+A selects only what the user can see: units inside a collapsed
+    section stay unselected."""
+    col = fake_mw.col
+    alpha_did = col.decks.id_for_name("Parent::Alpha")
+    page = DomPage(tray._web.page_html, connected=True)
+    try:
+        page.wait_loaded()
+        page.run_js("setEditMode(true); true")
+        page.run_js(f"toggleSection({alpha_did}); true")
+        total = page.run_js("_detailUnits().length")
+        hidden = page.run_js(
+            "_detailUnits().filter(function(el) {"
+            " return el.closest('.deck-body.collapsed') !== null; }).length"
+        )
+        assert total > 0 and 0 < hidden < total  # Alpha holds cherry + date
+        page.run_js(
+            "document.dispatchEvent(new KeyboardEvent('keydown',"
+            " {key: 'a', ctrlKey: true, bubbles: true, cancelable: true})); true"
+        )
+        assert page.run_js("_selected.size") == total - hidden
+        for key in ("cherry", "date"):
+            assert not page.run_js(
+                f"_selected.has('{col._test_cids[key]}')"
+            )
+        # Expanding the section and selecting again picks the rest up
+        # (expanded directly — toggleSection only drops .collapsed on
+        # transitionend, which is timing-dependent offscreen).
+        page.run_js(
+            f"var b = document.getElementById('body-{alpha_did}');"
+            "b.classList.remove('collapsed'); b.style.height = 'auto'; true"
+        )
+        page.run_js("selectAll(); true")
+        assert page.run_js("_selected.size") == total
+    finally:
+        page.close()
+
+
 def test_dom_tag_pill_click_requests_filter(qapp, tray, fake_mw):
     """Clicking a tag pill sends filter_tag (and doesn't open the card)."""
     cids = fake_mw.col._test_cids
