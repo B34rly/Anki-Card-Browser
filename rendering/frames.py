@@ -53,6 +53,7 @@ def build_selection_bar() -> str:
         f'{btn("bury", "Bury")}'
         f'{btn("change_deck", "Change deck…")}'
         f'{btn("add_tag", "Add tag…")}'
+        f'{btn("find_replace", "Find & replace…")}'
         f'{btn("delete", "Delete", " sel-danger")}'
         f'<button class="sel-btn sel-close" onclick="clearSelection()" '
         f'title="Clear selection">✕</button>'

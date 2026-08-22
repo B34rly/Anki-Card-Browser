@@ -484,6 +484,8 @@ class CardTray(QWidget, RenderMixin, RefreshMixin):
             started = actions.delete_cards(self, col, card_ids)
         elif action in ("add_tag", "remove_tag"):
             started = actions.prompt_tag_action(self, col, action, card_ids)
+        elif action == "find_replace":
+            started = actions.prompt_find_replace(self, col, card_ids)
         else:
             started = actions.apply_scheduling_action(self, col, action, card_ids)
         if started:

@@ -163,6 +163,97 @@ def undo_redo(parent, redo: bool = False) -> None:
     )
 
 
+def _get_find_replace_spec(parent, col, note_ids):
+    """Modal Find & Replace dialog.
+
+    Returns (search, replacement, field_name, regex, match_case) or None on
+    cancel/empty search. Split from prompt_find_replace so tests can drive
+    the op without a dialog.
+    """
+    from aqt.qt import (
+        QCheckBox,
+        QComboBox,
+        QDialog,
+        QDialogButtonBox,
+        QFormLayout,
+        QLineEdit,
+    )
+
+    dlg = QDialog(parent)
+    dlg.setWindowTitle("Find & Replace")
+    form = QFormLayout(dlg)
+    find_edit = QLineEdit()
+    replace_edit = QLineEdit()
+    field_combo = QComboBox()
+    field_combo.addItem("All fields", userData=None)
+    for name in col.field_names_for_note_ids(note_ids):
+        field_combo.addItem(name, userData=name)
+    case_cb = QCheckBox("Match case")
+    regex_cb = QCheckBox("Regular expression")
+    form.addRow("Find:", find_edit)
+    form.addRow("Replace with:", replace_edit)
+    form.addRow("In:", field_combo)
+    form.addRow(case_cb)
+    form.addRow(regex_cb)
+    buttons = QDialogButtonBox(
+        QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+    )
+    buttons.accepted.connect(dlg.accept)
+    buttons.rejected.connect(dlg.reject)
+    form.addRow(buttons)
+    find_edit.setFocus()
+    if dlg.exec() != QDialog.DialogCode.Accepted:
+        return None
+    search = find_edit.text()
+    if not search:
+        return None
+    return (
+        search,
+        replace_edit.text(),
+        field_combo.currentData(),
+        regex_cb.isChecked(),
+        case_cb.isChecked(),
+    )
+
+
+def prompt_find_replace(parent, col, cids) -> bool:
+    """Prompt for and start a find & replace over the notes behind *cids*.
+
+    Returns True when an op was started (False = cancelled/empty prompt).
+    """
+    from anki.notes import NoteId
+
+    card_ids = [int(c) for c in cids]
+    note_ids = sorted(
+        NoteId(n)
+        for n in {m["nid"] for m in get_cards_metadata(col, card_ids).values()}
+    )
+    if not note_ids:
+        return False
+    spec = _get_find_replace_spec(parent, col, note_ids)
+    if spec is None:
+        return False
+    search, replacement, field_name, regex, match_case = spec
+    total = len(note_ids)
+
+    (
+        CollectionOp(
+            parent,
+            lambda c: c.find_and_replace(
+                note_ids=note_ids,
+                search=search,
+                replacement=replacement,
+                regex=regex,
+                field_name=field_name,
+                match_case=match_case,
+            ),
+        )
+        .success(lambda out: _toast(parent, f"Replaced in {out.count} of {total} notes"))
+        .run_in_background(initiator=parent)
+    )
+    return True
+
+
 def prompt_change_deck(parent, col, cids) -> int | None:
     """Prompt for a target deck for *cids*; returns its id or None."""
     choices = [d.name for d in col.decks.all_names_and_ids(include_filtered=False)]
