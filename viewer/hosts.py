@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from aqt import mw, gui_hooks
 from aqt.qt import (
+    QKeySequence,
     QMainWindow,
+    QShortcut,
     Qt,
 )
 
@@ -22,6 +24,13 @@ class CardBrowserWindow(QMainWindow):
         self.resize(1100, 750)
         self._widget = CardBrowserWidget(self)
         self.setCentralWidget(self._widget)
+        # No Anki menu bar in a standalone window — provide the standard
+        # undo/redo shortcuts directly. (Embedded mode inherits mw's Edit
+        # menu, so adding them there would make the shortcut ambiguous.)
+        undo_sc = QShortcut(QKeySequence.StandardKey.Undo, self)
+        undo_sc.activated.connect(self._widget.trigger_undo)
+        redo_sc = QShortcut(QKeySequence.StandardKey.Redo, self)
+        redo_sc.activated.connect(self._widget.trigger_redo)
 
     def closeEvent(self, a0):
         CardBrowserWindow._instance = None

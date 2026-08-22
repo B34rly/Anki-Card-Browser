@@ -28,6 +28,8 @@ from .style import (
     _SVG_EDIT,
     _SVG_VIEW,
     _SVG_REFRESH,
+    _SVG_UNDO,
+    _SVG_REDO,
     _SVG_ARROW_DOWN,
     _SVG_ARROW_UP,
     _svg_icon,
@@ -41,6 +43,7 @@ from .filter_bar import (
     update_filter_chips,
 )
 from .searches import load_history, open_saved_search_menu, push_history
+from ..tray.actions import undo_redo
 
 
 class CardBrowserWidget(QWidget):
@@ -102,6 +105,16 @@ class CardBrowserWidget(QWidget):
         self._refresh_btn.clicked.connect(self._refresh_current_deck)
         self._update_refresh_icon()
         search_row.addWidget(self._refresh_btn, 0)
+
+        # Undo/redo: same ops as Anki's Edit menu, surfaced in the browser
+        # (the window host has no menu bar; it adds Ctrl+Z/Ctrl+Shift+Z).
+        self._undo_btn = QToolButton()
+        self._undo_btn.clicked.connect(self.trigger_undo)
+        search_row.addWidget(self._undo_btn, 0)
+        self._redo_btn = QToolButton()
+        self._redo_btn.clicked.connect(self.trigger_redo)
+        search_row.addWidget(self._redo_btn, 0)
+        self._update_undo_actions()
 
         left_layout.addLayout(search_row)
 
@@ -562,6 +575,7 @@ class CardBrowserWidget(QWidget):
         top-level deck dropdown and the sidebar (a rename keeps ids but
         changes labels/templates).
         """
+        self._update_undo_actions()  # every op shifts the undo/redo stack
         if not (changes.deck or changes.notetype):
             return
         if not self.isVisible():
@@ -576,6 +590,7 @@ class CardBrowserWidget(QWidget):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        self._update_undo_actions()
         if self._needs_refresh_on_show:
             self._needs_refresh_on_show = False
             self._refresh_current_deck()
@@ -583,3 +598,33 @@ class CardBrowserWidget(QWidget):
     def _update_refresh_icon(self) -> None:
         color = self.palette().windowText().color().name()
         self._refresh_btn.setIcon(_svg_icon(_SVG_REFRESH.format(color=color)))
+
+    # ── Undo / redo ──
+
+    def trigger_undo(self) -> None:
+        undo_redo(self.tray)
+
+    def trigger_redo(self) -> None:
+        undo_redo(self.tray, redo=True)
+
+    def _update_undo_actions(self) -> None:
+        """Enable/label the undo & redo buttons from the collection's state."""
+        undo_label = redo_label = ""
+        col = getattr(mw, "col", None)
+        if col is not None:
+            try:
+                status = col.undo_status()
+                undo_label, redo_label = status.undo, status.redo
+            except Exception:
+                pass
+        color = self.palette().windowText().color().name()
+        self._undo_btn.setIcon(_svg_icon(_SVG_UNDO.format(color=color)))
+        self._redo_btn.setIcon(_svg_icon(_SVG_REDO.format(color=color)))
+        self._undo_btn.setEnabled(bool(undo_label))
+        self._undo_btn.setToolTip(
+            f"Undo {undo_label} (Ctrl+Z)" if undo_label else "Nothing to undo"
+        )
+        self._redo_btn.setEnabled(bool(redo_label))
+        self._redo_btn.setToolTip(
+            f"Redo {redo_label} (Ctrl+Shift+Z)" if redo_label else "Nothing to redo"
+        )

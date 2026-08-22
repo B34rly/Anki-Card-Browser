@@ -108,3 +108,16 @@ def test_external_change_handler_survives_filters(widget, fake_mw):
     # convergence: the handlers must not blow up, and the tray still
     # reflects the filtered view (title shows filtered counts)
     assert "/" in widget.tray.title
+
+
+def test_undo_buttons_track_undo_status(widget, fake_mw):
+    """The toolbar undo/redo buttons follow col.undo_status() through the
+    op pipeline: an op arms undo, undoing it arms redo."""
+    cid = fake_mw.col._test_cids["apple"]
+    widget.tray._on_bridge_cmd(f"suspend:{cid}")
+    assert widget._undo_btn.isEnabled()
+    assert "Undo" in widget._undo_btn.toolTip()
+
+    widget.trigger_undo()
+    assert widget._redo_btn.isEnabled()
+    assert "Redo" in widget._redo_btn.toolTip()

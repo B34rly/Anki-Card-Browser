@@ -140,6 +140,29 @@ def prompt_tag_action(parent, col, action: str, cids) -> bool:
     return True
 
 
+def undo_redo(parent, redo: bool = False) -> None:
+    """Start the undo (or redo) op; the page refresh arrives via the op
+    pipeline like any other change. UndoEmpty is swallowed — callers keep
+    the buttons disabled in that state anyway, this is just a race guard."""
+    from anki.errors import UndoEmpty
+
+    verb = "Redid" if redo else "Undid"
+
+    def op(c):
+        return c.redo() if redo else c.undo()
+
+    def on_failure(exc):
+        if not isinstance(exc, UndoEmpty):
+            QMessageBox.warning(parent, "Undo", str(exc))
+
+    (
+        CollectionOp(parent, op)
+        .success(lambda out: _toast(parent, f"{verb} {out.operation}"))
+        .failure(on_failure)
+        .run_in_background(initiator=parent)
+    )
+
+
 def prompt_change_deck(parent, col, cids) -> int | None:
     """Prompt for a target deck for *cids*; returns its id or None."""
     choices = [d.name for d in col.decks.all_names_and_ids(include_filtered=False)]

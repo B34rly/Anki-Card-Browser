@@ -178,6 +178,18 @@ _SVG_REFRESH = (
     '<path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>'
     '</svg>'
 )
+_SVG_UNDO = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" '
+    'fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="M9 14 4 9l5-5"/>'
+    '<path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>'
+)
+_SVG_REDO = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" '
+    'fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="m15 14 5-5-5-5"/>'
+    '<path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg>'
+)
 _SVG_ARROW_DOWN = '<path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/>'
 _SVG_ARROW_UP = '<path d="M12 19V5"/><path d="M5 12l7-7 7 7"/>'
 
