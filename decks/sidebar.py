@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from aqt import mw
 from aqt.qt import (
     QWidget,
     QVBoxLayout,
@@ -17,6 +18,12 @@ from .ops import (
     confirm_delete_deck,
 )
 
+# Collection-config key for the sidebar's collapsed deck ids. Deliberately
+# separate from the tray's cardBrowser_collapsed_decks — the two views are
+# collapsed independently (a deck folded in the sidebar may stay open in the
+# grid and vice versa).
+_SIDEBAR_COLLAPSE_KEY = "cardBrowser_sidebar_collapsed"
+
 
 class DeckTree(QWidget):
     """A collapsible tree view of subdecks. Emits `deck_selected` when clicked."""
@@ -31,6 +38,12 @@ class DeckTree(QWidget):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self._edit_mode: bool = False
+        self._collapsed: set[int] = set()
+        # True while a name filter is active — its match-expansion is a view
+        # aid, not a state change (mirrors the tray's force-expand on search).
+        # Code-driven expansion (populate / filter clear) blocks the tree's
+        # signals instead, like highlight_deck does.
+        self._filtered: bool = False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
@@ -57,6 +70,12 @@ class DeckTree(QWidget):
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._on_context_menu)
         self._tree.itemClicked.connect(self._on_item_clicked)
+        self._tree.itemExpanded.connect(
+            lambda item: self._on_expand_changed(item, collapsed=False)
+        )
+        self._tree.itemCollapsed.connect(
+            lambda item: self._on_expand_changed(item, collapsed=True)
+        )
         layout.addWidget(self._tree)
 
     @property
@@ -68,12 +87,77 @@ class DeckTree(QWidget):
         self._edit_mode = value
 
     def populate(self, root_node, parent_path: str = "") -> None:
-        """Build the tree from an Anki DeckTreeNode (the selected top-level deck)."""
-        self._tree.clear()
-        root_item = self._tree.invisibleRootItem()
-        if root_item is not None:
-            self._add_children(root_node, parent_path, root_item)
-        self._tree.expandAll()
+        """Build the tree from an Anki DeckTreeNode (the selected top-level deck).
+
+        Expansion state is restored from the persisted set — decks default to
+        expanded; only ones the user collapsed stay collapsed across
+        repopulates and restarts.
+        """
+        self._collapsed = self._load_collapsed()
+        self._filtered = False  # a rebuilt tree starts unfiltered
+        self._tree.blockSignals(True)
+        try:
+            self._tree.clear()
+            root_item = self._tree.invisibleRootItem()
+            if root_item is not None:
+                self._add_children(root_node, parent_path, root_item)
+                self._apply_saved_expansion(root_item)
+        finally:
+            self._tree.blockSignals(False)
+
+    # ── Persisted collapse state ──
+
+    def _load_collapsed(self) -> set[int]:
+        """Read the saved sidebar-collapsed deck ids from the collection config."""
+        col = getattr(mw, "col", None)
+        if col is None:
+            return set(self._collapsed)
+        try:
+            saved = col.get_config(_SIDEBAR_COLLAPSE_KEY, [])
+            if isinstance(saved, list):
+                return {int(d) for d in saved}
+        except Exception:
+            pass
+        return set()
+
+    def _save_collapsed(self) -> None:
+        """Persist the current sidebar-collapsed deck ids."""
+        col = getattr(mw, "col", None)
+        if col is None:
+            return
+        try:
+            col.set_config(_SIDEBAR_COLLAPSE_KEY, sorted(self._collapsed))
+        except Exception:
+            pass
+
+    def _apply_saved_expansion(self, item: QTreeWidgetItem) -> None:
+        """Expand every item except those in the persisted collapsed set."""
+        for i in range(item.childCount()):
+            child = item.child(i)
+            if child is None:
+                continue
+            deck_id = child.data(0, Qt.ItemDataRole.UserRole)
+            child.setExpanded(deck_id is None or int(deck_id) not in self._collapsed)
+            self._apply_saved_expansion(child)
+
+    def _on_expand_changed(self, item: QTreeWidgetItem, collapsed: bool) -> None:
+        """A tree item was expanded/collapsed — persist genuine user changes.
+
+        Programmatic changes never get here: populate/filter-clear and
+        highlight_deck block the tree's signals while they mutate it. An
+        active name filter sets _filtered instead — its match-expansion (and
+        any clicks on that ephemeral view) is temporary by design.
+        """
+        if self._filtered:
+            return
+        deck_id = item.data(0, Qt.ItemDataRole.UserRole)
+        if deck_id is None:
+            return
+        if collapsed:
+            self._collapsed.add(int(deck_id))
+        else:
+            self._collapsed.discard(int(deck_id))
+        self._save_collapsed()
 
     def _add_children(self, node, parent_path: str, parent_item: QTreeWidgetItem) -> None:
         for child in node.children:
@@ -151,15 +235,26 @@ class DeckTree(QWidget):
         return None
 
     def filter(self, text: str) -> None:
-        """Show only tree items whose name (or descendants) match *text*."""
+        """Show only tree items whose name (or descendants) match *text*.
+
+        Matching branches are expanded so hits are visible, but only for the
+        duration of the filter — clearing it restores the saved expansion
+        state, not expand-all.
+        """
         root = self._tree.invisibleRootItem()
         if root is None:
             return
         needle = text.strip().lower()
         if not needle:
+            self._filtered = False
             self._set_all_visible(root, True)
-            self._tree.expandAll()
+            self._tree.blockSignals(True)
+            try:
+                self._apply_saved_expansion(root)
+            finally:
+                self._tree.blockSignals(False)
             return
+        self._filtered = True
         self._filter_item(root, needle)
 
     def _filter_item(self, item: QTreeWidgetItem, needle: str) -> bool:
